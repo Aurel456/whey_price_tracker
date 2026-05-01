@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Editor / tooling
+.kilo/
+.vscode/
+.idea/
+
+# Generated output (regénérés à chaque run)
+whey_prices.xlsx
+whey_dashboard.html
+
+# OS
+.DS_Store
+Thumbs.db
