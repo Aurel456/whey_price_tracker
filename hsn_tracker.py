@@ -47,7 +47,8 @@ EXTRA_URLS = [
 ]
 
 PAGE_TIMEOUT = 30_000
-CLICK_WAIT   = 1_800
+CLICK_WAIT   = 700
+CONCURRENCY  = 4
 
 PORT_RE = re.compile(
     r'(?:DDM:\s*([\d/]+)\s*\|)?\s*PORT\.:\s*(\d+)'
@@ -211,10 +212,13 @@ async def get_product_urls(page, category_urls: list) -> list:
     for cat_url in category_urls:
         try:
             await page.goto(cat_url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
-            await page.wait_for_timeout(3_000)
+            try:
+                await page.wait_for_selector('a.product-item-link, .product-item-info a', timeout=8_000)
+            except PlaywrightTimeout:
+                pass
             await dismiss_cookie_popup(page)
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await page.wait_for_timeout(1_500)
+            await page.wait_for_timeout(600)
             links = await page.evaluate("""() =>
                 Array.from(document.querySelectorAll('a.product-item-link, .product-item-info a'))
                     .map(a => a.href)
@@ -238,7 +242,10 @@ async def scrape_product(page, url: str) -> list:
     results = []
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
-        await page.wait_for_timeout(3_500)
+        try:
+            await page.wait_for_selector('h1', timeout=10_000)
+        except PlaywrightTimeout:
+            pass
         await dismiss_cookie_popup(page)
 
         name = await page.evaluate(
@@ -508,18 +515,42 @@ async def main():
                 "Chrome/120.0.0.0 Safari/537.36"
             )
         )
+        # Bloque les ressources inutiles pour aller plus vite
+        await context.route(
+            "**/*",
+            lambda route: route.abort()
+            if route.request.resource_type in {"image", "font", "media"}
+            else route.continue_(),
+        )
         page = await context.new_page()
 
         print("\nCollecte des URLs produits...")
         product_urls = await get_product_urls(page, CATEGORY_URLS)
+        # Inclure les URLs supplémentaires (déduplication)
+        seen = {u.split("?")[0].rstrip("/") for u in product_urls}
+        for u in EXTRA_URLS:
+            if u.split("?")[0].rstrip("/") not in seen:
+                product_urls.append(u)
         print(f"\n  {len(product_urls)} produits uniques\n")
+        await page.close()
 
-        all_rows = []
-        for i, url in enumerate(product_urls, 1):
-            short = url.split("/")[-1]
-            print(f"[{i:02d}/{len(product_urls)}] {short}")
-            rows = await scrape_product(page, url)
-            all_rows.extend(rows)
+        sem = asyncio.Semaphore(CONCURRENCY)
+        total = len(product_urls)
+
+        async def worker(idx: int, url: str):
+            async with sem:
+                short = url.split("/")[-1]
+                print(f"[{idx:02d}/{total}] {short}")
+                worker_page = await context.new_page()
+                try:
+                    return await scrape_product(worker_page, url)
+                finally:
+                    await worker_page.close()
+
+        batches = await asyncio.gather(
+            *(worker(i, u) for i, u in enumerate(product_urls, 1))
+        )
+        all_rows = [r for batch in batches for r in batch]
 
         await browser.close()
 
@@ -528,7 +559,7 @@ async def main():
         append_rows(all_rows)
         print(f"Excel OK : {EXCEL_PATH}")
         print("Generation du dashboard HTML...")
-        generate_dashboard(all_rows)
+        generate_dashboard()
         print(f"Termine ! {len(all_rows)} entrees pour le {date.today().isoformat()}")
     else:
         print("Aucune donnee collectee.")
