@@ -67,10 +67,19 @@ THIN_BORDER = Border(
     left=Side(style="thin"), right=Side(style="thin"),
     top=Side(style="thin"),  bottom=Side(style="thin"),
 )
-HEADERS    = ["Date", "Produit", "URL", "Taille", "Prix (€)",
-              "Portions", "Coût/portion (€)", "Prix/kg (€)", "DDM",
-              "Description courte", "Mots-clés"]
-COL_WIDTHS = [12, 45, 50, 12, 12, 10, 18, 15, 12, 60, 50]
+HEADERS    = [
+    "Date", "Produit", "URL", "Taille", "Prix (€)",
+    "Portions", "Coût/portion (€)", "Prix/kg (€)", "DDM",
+    "Description courte", "Mots-clés",
+    # Colonnes nutrition / coût protéine
+    "Prix/kg protéine (€)", "Coût/30g protéine (€)",
+    "Protéines (g/100g)", "Énergie (kcal/100g)",
+    "Glucides (g/100g)", "Lipides (g/100g)", "Sel (g/100g)",
+    "Leucine (mg/100g)", "Isoleucine (mg/100g)", "Valine (mg/100g)",
+    "Ingrédients", "Profil AA (JSON)",
+]
+COL_WIDTHS = [12, 45, 50, 12, 12, 10, 18, 15, 12, 60, 50,
+              18, 18, 16, 18, 16, 16, 14, 16, 16, 14, 80, 60]
 
 
 # ── Excel helpers ─────────────────────────────────────────────────────────────
@@ -96,7 +105,18 @@ def init_workbook():
 
 
 def load_or_create_workbook():
-    return load_workbook(EXCEL_PATH) if EXCEL_PATH.exists() else init_workbook()
+    if not EXCEL_PATH.exists():
+        return init_workbook()
+    wb = load_workbook(EXCEL_PATH)
+    ws = wb["Historique"]
+    existing = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    if len(existing) < len(HEADERS):
+        for col, h in enumerate(HEADERS[len(existing):], start=len(existing) + 1):
+            c = ws.cell(row=1, column=col, value=h)
+            _style(c, fill=HEADER_FILL, font=HEADER_FONT, alignment=CENT_ALIGN)
+            ws.column_dimensions[get_column_letter(col)].width = COL_WIDTHS[col - 1]
+        wb.save(EXCEL_PATH)
+    return wb
 
 
 def _clean(val):
@@ -121,6 +141,7 @@ def append_rows(rows: list):
     today = date.today().isoformat()
     next_row = ws.max_row + 1
     for i, r in enumerate(rows):
+        aa = r.get("amino_acids") or {}
         data = [
             today, r.get("name", ""), r.get("url", ""), r.get("size", ""),
             _to_float(r.get("price")),
@@ -130,6 +151,19 @@ def append_rows(rows: list):
             r.get("ddm", ""),
             r.get("desc_short", ""),
             r.get("keywords", ""),
+            # Coût protéine + nutrition
+            r.get("px_kg_proteine"),
+            r.get("cout_30g_proteine"),
+            r.get("proteines_100g"),
+            r.get("energie_kcal_100g"),
+            r.get("glucides_100g"),
+            r.get("lipides_100g"),
+            r.get("sel_100g"),
+            aa.get("L-Leucine") or aa.get("Leucine"),
+            aa.get("L-Isoleucine") or aa.get("Isoleucine"),
+            aa.get("L-Valine") or aa.get("Valine"),
+            r.get("ingredients", ""),
+            json.dumps(aa, ensure_ascii=False) if aa else "",
         ]
         row_fill = ALT_FILL if i % 2 == 0 else None
         for col, val in enumerate(data, start=1):
@@ -196,6 +230,139 @@ def build_option_price_map(spconfig: dict) -> dict:
     return mapping
 
 
+# ── Extraction nutrition / AA / ingrédients ───────────────────────────────────
+_NUM_RE = re.compile(r'([\d,\.]+)')
+_KCAL_RE = re.compile(r'([\d,\.]+)\s*Kcal', re.IGNORECASE)
+
+
+def _parse_num(text):
+    if not text:
+        return None
+    t = str(text).strip()
+    m = _KCAL_RE.search(t)  # priorité aux Kcal pour la valeur énergétique
+    if m:
+        return float(m.group(1).replace(",", "."))
+    m = _NUM_RE.search(t)
+    if m:
+        return float(m.group(1).replace(",", "."))
+    return None
+
+
+_TABLES_JS = r"""() => {
+    const findHeading = (t) => {
+        let p = t.parentElement;
+        while (p) {
+            const hs = p.querySelectorAll(':scope h1, :scope h2, :scope h3, :scope h4');
+            let last = null;
+            for (const h of hs) {
+                if (t.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_PRECEDING) last = h;
+            }
+            if (last) return last.innerText.trim();
+            p = p.parentElement;
+        }
+        return '';
+    };
+    return Array.from(document.querySelectorAll('table')).map(t => ({
+        heading: findHeading(t),
+        rows: Array.from(t.rows).map(r =>
+            Array.from(r.cells).map(c => c.innerText.trim())
+        ),
+    }));
+}"""
+
+_INGREDIENTS_JS = r"""() => {
+    const headers = Array.from(document.querySelectorAll('p, h2, h3, h4, span, strong'))
+        .filter(el => el.textContent.trim() === 'Ingrédients');
+    for (const h of headers) {
+        let next = h.nextElementSibling;
+        while (next && !next.innerText?.trim()) next = next.nextElementSibling;
+        if (next && next.innerText.trim().length > 20) {
+            return next.innerText.trim();
+        }
+    }
+    return '';
+}"""
+
+
+def _parse_nutrition(tables):
+    """Extrait les valeurs nutritionnelles pour 100g depuis les tables HTML."""
+    out = {}
+    for tbl in tables:
+        if "nutritionnel" not in tbl["heading"].lower():
+            continue
+        for row in tbl["rows"][1:]:
+            if len(row) < 3:
+                continue
+            label = row[0].lower()
+            val = _parse_num(row[2])
+            if val is None:
+                continue
+            if "valeur" in label or "énerg" in label or "energ" in label:
+                out["energie_kcal_100g"] = val
+            elif "protéin" in label or "protein" in label:
+                out["proteines_100g"] = val
+            elif "sucre" in label:
+                out["sucres_100g"] = val
+            elif "glucides" in label or "hydrates" in label or "carbon" in label:
+                out["glucides_100g"] = val
+            elif "satur" in label:
+                out["lipides_satures_100g"] = val
+            elif "graisse" in label or "lipide" in label:
+                out["lipides_100g"] = val
+            elif "sel" in label or "sodium" in label:
+                out["sel_100g"] = val
+        break
+    return out
+
+
+def _parse_amino_acids(tables):
+    """Extrait le profil AA (mg/100g) depuis les tables HTML."""
+    out = {}
+    for tbl in tables:
+        h = tbl["heading"].lower()
+        if "acide" not in h or "amin" not in h:
+            continue
+        for row in tbl["rows"][1:]:
+            if len(row) == 1:
+                m = re.match(r'(.+?)([\d\.,]+)\s*mg', row[0])
+                if m:
+                    out[m.group(1).strip()] = float(m.group(2).replace(",", "."))
+            elif len(row) >= 2:
+                m = re.search(r'([\d\.,]+)\s*mg', row[1])
+                if m:
+                    out[row[0].strip()] = float(m.group(1).replace(",", "."))
+        break
+    return out
+
+
+async def extract_nutrition_data(page) -> dict:
+    """Récupère nutrition /100g + acides aminés + ingrédients (1× par produit)."""
+    # Scroll pour déclencher le lazy-load des tables
+    for _ in range(6):
+        await page.evaluate("window.scrollBy(0, 1200)")
+        await page.wait_for_timeout(150)
+
+    tables = await page.evaluate(_TABLES_JS)
+    ingredients = await page.evaluate(_INGREDIENTS_JS) or ""
+    return {
+        "nutrition": _parse_nutrition(tables),
+        "amino_acids": _parse_amino_acids(tables),
+        "ingredients": ingredients,
+    }
+
+
+def _compute_protein_costs(px_kg, prot_per_100g):
+    """Calcule prix/kg de protéine pure et coût pour 30g de protéine."""
+    if px_kg is None or not prot_per_100g:
+        return None, None
+    ratio = prot_per_100g / 100.0
+    if ratio <= 0:
+        return None, None
+    px_kg_prot = round(px_kg / ratio, 2)
+    cout_30g = round(px_kg_prot * 0.030, 3)
+    return px_kg_prot, cout_30g
+
+
 async def dismiss_cookie_popup(page) -> None:
     try:
         await page.click('#didomi-notice-agree-button', timeout=3_000)
@@ -238,6 +405,22 @@ async def get_product_urls(page, category_urls: list) -> list:
     return urls
 
 
+SIZE_EXCLUDE_RE = re.compile(r'monodose|pack', re.IGNORECASE)
+
+
+def _enrich_row(row: dict, nutri: dict) -> dict:
+    """Ajoute nutrition + acides aminés + coût protéine à une ligne."""
+    n = nutri.get("nutrition", {})
+    row["amino_acids"] = nutri.get("amino_acids", {})
+    row["ingredients"] = nutri.get("ingredients", "")
+    row.update(n)
+    px_kg = _to_float(row.get("px_kg"))
+    px_kg_prot, cout_30g = _compute_protein_costs(px_kg, n.get("proteines_100g"))
+    row["px_kg_proteine"] = px_kg_prot
+    row["cout_30g_proteine"] = cout_30g
+    return row
+
+
 async def scrape_product(page, url: str) -> list:
     results = []
     try:
@@ -257,6 +440,9 @@ async def scrape_product(page, url: str) -> list:
         spconfig = extract_spconfig(html)
         option_price_map = build_option_price_map(spconfig) if spconfig else {}
 
+        # Nutrition / AA / ingrédients : 1× par produit (identique sur toutes les tailles)
+        nutri = await extract_nutrition_data(page)
+
         sizes = await page.evaluate("""() =>
             Array.from(document.querySelectorAll('input[name*="super_attribute"]')).map(i => ({
                 value: i.value,
@@ -264,6 +450,8 @@ async def scrape_product(page, url: str) -> list:
                 label: document.querySelector('label[for="' + i.id + '"]')?.innerText?.trim()
             })).filter(s => s.label)
         """)
+        # Exclure les tailles Monodose / Pack
+        sizes = [s for s in sizes if not SIZE_EXCLUDE_RE.search(s["label"])]
 
         if not sizes:
             text = await page.evaluate("document.body.innerText")
@@ -271,10 +459,11 @@ async def scrape_product(page, url: str) -> list:
             price_raw = await page.evaluate(
                 "document.querySelector('[data-price-type=\"finalPrice\"] .price')?.innerText || ''"
             )
-            results.append({
+            row = {
                 "name": name, "url": url, "size": "Unique",
                 "price": _clean(price_raw), **port_data,
-            })
+            }
+            results.append(_enrich_row(row, nutri))
             return results
 
         for sz in sizes:
@@ -289,15 +478,16 @@ async def scrape_product(page, url: str) -> list:
             port_data = parse_port_line(text)
             price_str = f"{price_amount:.2f}" if price_amount is not None else None
 
-            results.append({
+            row = {
                 "name": name, "url": url, "size": sz["label"],
                 "price": price_str, **port_data,
-            })
+            }
+            results.append(_enrich_row(row, nutri))
             print(
                 f"    {sz['label']:12} | {(price_str or '?'):>8} EUR | "
                 f"PORT:{port_data.get('portions','?'):>4} | "
-                f"{port_data.get('cout_portion','?'):>10} | "
-                f"{port_data.get('px_kg','?')}"
+                f"PROT:{nutri['nutrition'].get('proteines_100g','?')}g | "
+                f"PX/KG-PROT:{row.get('px_kg_proteine','?')}"
             )
 
     except PlaywrightTimeout:
@@ -321,6 +511,19 @@ def generate_dashboard(rows=None):
             if any(v is not None for v in r)
         ]
 
+    # Dédup : garder la dernière entrée par (produit, taille)
+    latest = {}
+    for r in rows:
+        size = str(r.get("Taille", ""))
+        if not size or "Pack" in size or "Monodose" in size:
+            continue
+        if r.get("Prix/kg (€)") is None:
+            continue
+        key = (str(r.get("Produit", "")), size)
+        rdate = str(r.get("Date", ""))
+        if key not in latest or rdate >= str(latest[key].get("Date", "")):
+            latest[key] = r
+
     chart_rows = [
         {
             "date":     str(r.get("Date", "")),
@@ -332,10 +535,11 @@ def generate_dashboard(rows=None):
             "portions": r.get("Portions"),
             "ddm":      str(r.get("DDM") or ""),
             "url":      str(r.get("URL", "")),
+            "pxkgProt": r.get("Prix/kg protéine (€)"),
+            "cout30":   r.get("Cout/30g protéine (€)") or r.get("Coût/30g protéine (€)"),
+            "prot":     r.get("Protéines (g/100g)"),
         }
-        for r in rows
-        if r.get("Taille") and "Pack" not in str(r.get("Taille", ""))
-        and r.get("Prix/kg (€)") is not None
+        for r in latest.values()
     ]
 
     data_json = json.dumps(chart_rows, ensure_ascii=False, default=str)
@@ -394,24 +598,31 @@ def generate_dashboard(rows=None):
         "<div class='cards' id='metricCards'></div>\n"
         "<div class='filters' id='filters'></div>\n"
         "<div class='chart-wrap'>\n"
-        "  <div class='section-title'>Prix au kilo (EUR/kg)</div>\n"
+        "  <div class='section-title'>Prix par kilo de protéine pure (EUR/kg)</div>\n"
+        "  <div class='legend' id='legendPxkgProt'></div>\n"
+        "  <div style='position:relative;height:300px;'><canvas id='chartPxkgProt'></canvas></div>\n"
+        "</div>\n"
+        "<div class='chart-wrap'>\n"
+        "  <div class='section-title'>Coût pour 30g de protéine (EUR)</div>\n"
+        "  <div class='legend' id='legendCout30'></div>\n"
+        "  <div style='position:relative;height:300px;'><canvas id='chartCout30'></canvas></div>\n"
+        "</div>\n"
+        "<div class='chart-wrap'>\n"
+        "  <div class='section-title'>Prix au kilo de produit (EUR/kg)</div>\n"
         "  <div class='legend' id='legendPxkg'></div>\n"
         "  <div style='position:relative;height:300px;'><canvas id='chartPxkg'></canvas></div>\n"
         "</div>\n"
         "<div class='chart-wrap'>\n"
-        "  <div class='section-title'>Cout par portion (EUR)</div>\n"
-        "  <div class='legend' id='legendCout'></div>\n"
-        "  <div style='position:relative;height:300px;'><canvas id='chartCout'></canvas></div>\n"
-        "</div>\n"
-        "<div class='chart-wrap'>\n"
-        "  <div class='section-title'>Donnees completes</div>\n"
+        "  <div class='section-title'>Données complètes</div>\n"
         "  <table id='detailTable'><thead><tr>\n"
-        "    <th style='width:35%'>Produit</th><th style='width:10%'>Taille</th>\n"
-        "    <th style='width:10%;text-align:right'>Prix</th>\n"
-        "    <th style='width:10%;text-align:right'>EUR/kg</th>\n"
-        "    <th style='width:12%;text-align:right'>EUR/portion</th>\n"
-        "    <th style='width:8%;text-align:right'>Portions</th>\n"
-        "    <th style='width:15%;text-align:right'>Date</th>\n"
+        "    <th style='width:28%'>Produit</th><th style='width:8%'>Taille</th>\n"
+        "    <th style='width:8%;text-align:right'>Prix</th>\n"
+        "    <th style='width:7%;text-align:right'>%Prot</th>\n"
+        "    <th style='width:11%;text-align:right'>EUR/kg prot</th>\n"
+        "    <th style='width:11%;text-align:right'>EUR/30g prot</th>\n"
+        "    <th style='width:9%;text-align:right'>EUR/kg</th>\n"
+        "    <th style='width:9%;text-align:right'>EUR/portion</th>\n"
+        "    <th style='width:9%;text-align:right'>Date</th>\n"
         "  </tr></thead><tbody id='tableBody'></tbody></table>\n"
         "</div>\n"
         f"<script>\nconst RAW = {data_json};\n"
@@ -419,8 +630,8 @@ def generate_dashboard(rows=None):
         "const PRODUCTS = [...new Set(RAW.map(r=>r.produit))];\n"
         "const SIZES = [...new Set(RAW.map(r=>r.taille))];\n"
         "let currentSize = 'all';\n"
-        "let chartPxkg, chartCout;\n"
-        "function fmt(v,d=2){return v!=null?v.toFixed(d)+' EUR':'—';}\n"
+        "let chartPxkgProt, chartCout30, chartPxkg;\n"
+        "function fmt(v,d=2,suf=' EUR'){return v!=null?Number(v).toFixed(d)+suf:'—';}\n"
         "function getFiltered(){return currentSize==='all'?RAW:RAW.filter(r=>r.taille===currentSize);}\n"
         "function shortName(p){return p.length>32?p.slice(0,30)+'…':p;}\n"
         "function buildDatasets(key){\n"
@@ -431,54 +642,60 @@ def generate_dashboard(rows=None):
         "    backgroundColor:COLORS[sz]||'#888',borderRadius:4,borderSkipped:false\n"
         "  }));\n"
         "}\n"
-        "const COPTS=()=>({\n"
+        "const COPTS=(unit=' EUR',d=2)=>({\n"
         "  responsive:true,maintainAspectRatio:false,\n"
-        "  plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?ctx.parsed.y.toFixed(2)+' EUR':'N/A'}`}}},\n"
+        "  plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?Number(ctx.parsed.y).toFixed(d)+unit:'N/A'}`}}},\n"
         "  scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:35}},\n"
-        "          y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},callback:v=>v.toFixed(2)+' EUR'},beginAtZero:false}}\n"
+        "          y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},callback:v=>Number(v).toFixed(d)+unit},beginAtZero:false}}\n"
         "});\n"
         "function buildLegend(id){\n"
         "  const sizes=currentSize==='all'?SIZES:[currentSize];\n"
         "  document.getElementById(id).innerHTML=sizes.map(sz=>`<span><span class='legend-dot' style='background:${COLORS[sz]||\"#888\"}'></span>${sz}</span>`).join('');\n"
         "}\n"
         "function initCharts(){\n"
+        "  chartPxkgProt=new Chart(document.getElementById('chartPxkgProt'),{type:'bar',data:{labels:PRODUCTS.map(shortName),datasets:buildDatasets('pxkgProt')},options:COPTS()});\n"
+        "  chartCout30=new Chart(document.getElementById('chartCout30'),{type:'bar',data:{labels:PRODUCTS.map(shortName),datasets:buildDatasets('cout30')},options:COPTS(' EUR',3)});\n"
         "  chartPxkg=new Chart(document.getElementById('chartPxkg'),{type:'bar',data:{labels:PRODUCTS.map(shortName),datasets:buildDatasets('pxkg')},options:COPTS()});\n"
-        "  chartCout=new Chart(document.getElementById('chartCout'),{type:'bar',data:{labels:PRODUCTS.map(shortName),datasets:buildDatasets('cout')},options:COPTS()});\n"
-        "  buildLegend('legendPxkg');buildLegend('legendCout');\n"
+        "  buildLegend('legendPxkgProt');buildLegend('legendCout30');buildLegend('legendPxkg');\n"
         "}\n"
         "function updateCharts(){\n"
-        "  chartPxkg.data.datasets=buildDatasets('pxkg');chartCout.data.datasets=buildDatasets('cout');\n"
-        "  chartPxkg.update();chartCout.update();buildLegend('legendPxkg');buildLegend('legendCout');\n"
+        "  chartPxkgProt.data.datasets=buildDatasets('pxkgProt');\n"
+        "  chartCout30.data.datasets=buildDatasets('cout30');\n"
+        "  chartPxkg.data.datasets=buildDatasets('pxkg');\n"
+        "  chartPxkgProt.update();chartCout30.update();chartPxkg.update();\n"
+        "  buildLegend('legendPxkgProt');buildLegend('legendCout30');buildLegend('legendPxkg');\n"
         "}\n"
         "function updateTable(){\n"
         "  const f=getFiltered();\n"
-        "  const mnPx=Math.min(...f.filter(r=>r.pxkg).map(r=>r.pxkg));\n"
-        "  const mnCo=Math.min(...f.filter(r=>r.cout).map(r=>r.cout));\n"
+        "  const mnPxP=Math.min(...f.filter(r=>r.pxkgProt).map(r=>r.pxkgProt));\n"
+        "  const mnC30=Math.min(...f.filter(r=>r.cout30).map(r=>r.cout30));\n"
         "  document.getElementById('tableBody').innerHTML=f.map((r,i)=>`\n"
         "    <tr><td title='${r.produit}'><a href='${r.url}' target='_blank'>${r.produit}</a></td>\n"
         "    <td>${r.taille}</td>\n"
         "    <td style='text-align:right'>${fmt(r.prix)}</td>\n"
-        "    <td style='text-align:right' class='${r.pxkg===mnPx?\"best-cell\":\"\"}'>${fmt(r.pxkg)}</td>\n"
-        "    <td style='text-align:right' class='${r.cout===mnCo?\"best-cell\":\"\"}'>${fmt(r.cout)}</td>\n"
-        "    <td style='text-align:right'>${r.portions||'—'}</td>\n"
+        "    <td style='text-align:right'>${r.prot!=null?Number(r.prot).toFixed(0)+'%':'—'}</td>\n"
+        "    <td style='text-align:right' class='${r.pxkgProt===mnPxP?\"best-cell\":\"\"}'>${fmt(r.pxkgProt)}</td>\n"
+        "    <td style='text-align:right' class='${r.cout30===mnC30?\"best-cell\":\"\"}'>${fmt(r.cout30,3)}</td>\n"
+        "    <td style='text-align:right'>${fmt(r.pxkg)}</td>\n"
+        "    <td style='text-align:right'>${fmt(r.cout)}</td>\n"
         "    <td style='text-align:right;font-size:11px;color:#888'>${r.date}</td>\n"
         "    </tr>`).join('');\n"
         "}\n"
         "function buildMetrics(){\n"
-        "  const wp=RAW.filter(r=>r.pxkg);\n"
-        "  const best=wp.reduce((a,b)=>a.pxkg<b.pxkg?a:b,wp[0]);\n"
-        "  const bc=RAW.filter(r=>r.cout).reduce((a,b)=>a.cout<b.cout?a:b);\n"
+        "  const wpp=RAW.filter(r=>r.pxkgProt);\n"
+        "  const wc30=RAW.filter(r=>r.cout30);\n"
+        "  const wpx=RAW.filter(r=>r.pxkg);\n"
+        "  const bestProt=wpp.length?wpp.reduce((a,b)=>a.pxkgProt<b.pxkgProt?a:b):null;\n"
+        "  const bestC30=wc30.length?wc30.reduce((a,b)=>a.cout30<b.cout30?a:b):null;\n"
+        "  const bestPx=wpx.length?wpx.reduce((a,b)=>a.pxkg<b.pxkg?a:b):null;\n"
         "  const prods=new Set(RAW.map(r=>r.produit)).size;\n"
-        "  document.getElementById('metricCards').innerHTML=`\n"
-        "    <div class='card'><div class='card-label'>Produits</div><div class='card-value'>${prods}</div></div>\n"
-        "    <div class='card'><div class='card-label'>Meilleur EUR/kg</div>"
-        "<div class='card-value best'>${best.pxkg.toFixed(2)} EUR</div>"
-        "<div class='card-sub'>${best.produit.slice(0,28)} — ${best.taille}</div></div>\n"
-        "    <div class='card'><div class='card-label'>Meilleur EUR/portion</div>"
-        "<div class='card-value best'>${bc.cout.toFixed(2)} EUR</div>"
-        "<div class='card-sub'>${bc.produit.slice(0,28)} — ${bc.taille}</div></div>\n"
-        f"    <div class='card'><div class='card-label'>Mise a jour</div>"
-        f"<div class='card-value' style='font-size:16px'>{today_str}</div></div>`;\n"
+        "  const cards=[];\n"
+        "  cards.push(`<div class='card'><div class='card-label'>Produits</div><div class='card-value'>${prods}</div></div>`);\n"
+        "  if(bestProt){cards.push(`<div class='card'><div class='card-label'>Meilleur EUR/kg protéine</div><div class='card-value best'>${bestProt.pxkgProt.toFixed(2)} EUR</div><div class='card-sub'>${bestProt.produit.slice(0,28)} — ${bestProt.taille}</div></div>`);}\n"
+        "  if(bestC30){cards.push(`<div class='card'><div class='card-label'>Meilleur 30g protéine</div><div class='card-value best'>${bestC30.cout30.toFixed(3)} EUR</div><div class='card-sub'>${bestC30.produit.slice(0,28)} — ${bestC30.taille}</div></div>`);}\n"
+        "  if(bestPx){cards.push(`<div class='card'><div class='card-label'>Meilleur EUR/kg produit</div><div class='card-value' style='font-size:18px'>${bestPx.pxkg.toFixed(2)} EUR</div><div class='card-sub'>${bestPx.produit.slice(0,28)} — ${bestPx.taille}</div></div>`);}\n"
+        f"  cards.push(`<div class='card'><div class='card-label'>Mise à jour</div><div class='card-value' style='font-size:16px'>{today_str}</div></div>`);\n"
+        "  document.getElementById('metricCards').innerHTML=cards.join('');\n"
         "}\n"
         "function buildFilters(){\n"
         "  document.getElementById('filters').innerHTML=['all',...SIZES].map(sz=>`\n"

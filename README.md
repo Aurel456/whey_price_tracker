@@ -7,9 +7,16 @@ Repo : [github.com/Aurel456/whey_price_tracker](https://github.com/Aurel456/whey
 ## Fonctionnement
 
 1. Parcourt les catégories de whey et protéines pour collecter les URLs produits
-2. Visite chaque produit en parallèle (4 simultanés), récupère les déclinaisons (tailles), prix, portions, DDM
-3. Ajoute les données du jour dans `whey_prices.xlsx` (feuille "Historique")
-4. Génère `whey_dashboard.html` avec graphiques Chart.js (prix/kg, coût/portion)
+2. Visite chaque produit en parallèle (4 simultanés), récupère :
+   - Déclinaisons (tailles), prix, portions, DDM
+   - Valeurs nutritionnelles pour 100g (protéines, énergie, glucides, lipides, sel)
+   - Profil des 18 acides aminés (mg/100g)
+   - Liste d'ingrédients
+3. Calcule le **prix par kilo de protéine pure** et le **coût pour 30g de protéine** (le ratio protéine/produit varie de ~70% à ~90%)
+4. Ajoute les données du jour dans `whey_prices.xlsx` (feuille "Historique")
+5. Génère `whey_dashboard.html` avec 3 graphiques Chart.js : €/kg protéine, coût/30g protéine, €/kg produit
+
+Les variantes "Monodose" et "Pack" sont automatiquement exclues.
 
 ## Utilisation
 
@@ -39,10 +46,11 @@ python hsn_tracker.py
 
 Le dashboard HTML affiche :
 
-- Cartes récapitulatives (nombre de produits, meilleur prix/kg, meilleur coût/portion)
+- Cartes récapitulatives : nombre de produits, **meilleur €/kg protéine**, meilleur coût pour 30g de protéine, meilleur €/kg produit
 - Filtre par taille (500g, 750g, 2Kg, etc.)
-- Graphiques barres : prix au kilo et coût par portion
-- Tableau détaillé de toutes les entrées
+- 3 graphiques barres : prix par kg de **protéine pure**, coût pour 30g de protéine, prix par kg de produit
+- Tableau détaillé avec %protéine, €/kg prot, €/30g prot
+- Déduplication automatique : si le même produit a été scrapé plusieurs fois, seule la dernière entrée est affichée
 
 ## Configuration
 

@@ -9,6 +9,7 @@ venv/
 .kilo/
 .vscode/
 .idea/
+.claude/
 
 # Generated output (regénérés à chaque run)
 whey_prices.xlsx
@@ -17,3 +18,8 @@ whey_dashboard.html
 # OS
 .DS_Store
 Thumbs.db
+
+# Fichiers debug / exploration locaux
+_*.py
+_*.json
+_*.html
