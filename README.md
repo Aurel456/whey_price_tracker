@@ -74,4 +74,22 @@ git commit -m "description du changement"
 git push
 ```
 
-Les fichiers générés (`whey_prices.xlsx`, `whey_dashboard.html`) et le venv (`.venv/`) sont exclus via `.gitignore`.
+`whey_prices.xlsx` et `whey_dashboard.html` sont **versionnés** : chaque mise à jour de prix produit un commit, ce qui crée un historique git complet de l'évolution des prix. Les fichiers ignorés par git : `.venv/`, `errors.log`, `.kilo/`, `__pycache__/`.
+
+## Automatisation cloud (GitHub Actions)
+
+Un workflow [.github/workflows/track-prices.yml](.github/workflows/track-prices.yml) tourne tous les jours à 9h UTC sur les serveurs GitHub. Il :
+
+1. Installe Python + Playwright Chromium (avec cache pour aller plus vite)
+2. Lance `hsn_tracker.py`
+3. Commit + push les nouveaux prix dans le repo
+
+**Avantages** : tracking continu même PC éteint, et chaque jour de prix devient un commit visible dans l'historique git. Gratuit jusqu'à 2000 minutes/mois.
+
+**Déclenchement manuel** : onglet *Actions* sur GitHub → *Daily price tracking* → *Run workflow*.
+
+## Robustesse
+
+- Retry automatique (1 retentative) sur produit qui timeout ou renvoie un résultat vide
+- Sanity check : un whey doit avoir entre 50% et 95% de protéines, sinon l'erreur est loggée dans `errors.log`
+- Logs détaillés des échecs dans `errors.log` (timestamp + URL + raison)

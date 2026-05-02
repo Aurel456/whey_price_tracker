@@ -11,9 +11,8 @@ venv/
 .idea/
 .claude/
 
-# Generated output (regénérés à chaque run)
-whey_prices.xlsx
-whey_dashboard.html
+# Generated output
+# whey_prices.xlsx et whey_dashboard.html sont versionnés (suivi de prix dans git)
 errors.log
 
 # OS
