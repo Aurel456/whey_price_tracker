@@ -612,7 +612,9 @@ def generate_dashboard(rows=None):
             if any(v is not None for v in r)
         ]
 
-    # Dédup : garder la dernière entrée par (produit, taille)
+    # Construit l'historique complet par (produit, taille) pour les tendances
+    from collections import defaultdict
+    history_by_key = defaultdict(list)
     latest = {}
     for r in rows:
         size = str(r.get("Taille", ""))
@@ -622,11 +624,31 @@ def generate_dashboard(rows=None):
             continue
         key = (str(r.get("Produit", "")), size)
         rdate = str(r.get("Date", ""))
+        history_by_key[key].append({
+            "date": rdate,
+            "pxkg": r.get("Prix/kg (€)"),
+            "pxkgProt": r.get("Prix/kg protéine (€)"),
+            "cout3leu": r.get("Cout/3g leucine (€)") or r.get("Coût/3g leucine (€)"),
+        })
         if key not in latest or rdate >= str(latest[key].get("Date", "")):
             latest[key] = r
 
-    chart_rows = [
-        {
+    # Calcule moyenne historique (hors dernière date) + flag deal
+    deal_meta = {}
+    for key, hist in history_by_key.items():
+        hist.sort(key=lambda x: x["date"])
+        latest_date = hist[-1]["date"] if hist else None
+        previous_pxp = [h["pxkgProt"] for h in hist if h["date"] != latest_date and h["pxkgProt"] is not None]
+        avg = (sum(previous_pxp) / len(previous_pxp)) if previous_pxp else None
+        cur = hist[-1]["pxkgProt"] if hist and hist[-1]["pxkgProt"] is not None else None
+        is_deal = bool(avg and cur and cur < avg * 0.95)  # -5% sous la moyenne
+        deal_meta[key] = {"avg": avg, "isDeal": is_deal, "histLen": len(hist)}
+
+    chart_rows = []
+    for r in latest.values():
+        key = (str(r.get("Produit", "")), str(r.get("Taille", "")))
+        meta = deal_meta.get(key, {})
+        chart_rows.append({
             "date":     str(r.get("Date", "")),
             "produit":  str(r.get("Produit", "")),
             "taille":   str(r.get("Taille", "")),
@@ -640,11 +662,24 @@ def generate_dashboard(rows=None):
             "cout30":   r.get("Cout/30g protéine (€)") or r.get("Coût/30g protéine (€)"),
             "prot":     r.get("Protéines (g/100g)"),
             "cout3leu": r.get("Cout/3g leucine (€)") or r.get("Coût/3g leucine (€)"),
+            "avgPxkgProt": meta.get("avg"),
+            "isDeal":      meta.get("isDeal", False),
+            "histLen":     meta.get("histLen", 0),
+        })
+
+    # Sérialise l'historique pour les courbes de tendance
+    history_json_data = [
+        {
+            "produit": k[0],
+            "taille":  k[1],
+            "points":  v,
         }
-        for r in latest.values()
+        for k, v in history_by_key.items()
+        if len(v) >= 2  # courbe seulement si au moins 2 points
     ]
 
     data_json = json.dumps(chart_rows, ensure_ascii=False, default=str)
+    history_json = json.dumps(history_json_data, ensure_ascii=False, default=str)
     today_str = date.today().strftime("%d/%m/%Y")
 
     # Collect unique dates for trend data
@@ -691,6 +726,20 @@ def generate_dashboard(rows=None):
         " font-size: 12px; color: #666; }\n"
         ".legend-dot { width: 10px; height: 10px; border-radius: 2px;"
         " display: inline-block; margin-right: 4px; vertical-align: middle; }\n"
+        ".table-toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }\n"
+        ".search-input { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px;"
+        " font-size: 12px; width: 240px; }\n"
+        "th.sortable { cursor: pointer; user-select: none; }\n"
+        "th.sortable:hover { background: #e8e8e8; }\n"
+        "th.sortable .sort-arrow { font-size: 10px; opacity: 0.4; margin-left: 3px; }\n"
+        "th.sortable.sort-asc .sort-arrow, th.sortable.sort-desc .sort-arrow { opacity: 1; color: #378ADD; }\n"
+        ".deal-badge { display: inline-block; background: #FF6B35; color: #fff;"
+        " font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px;"
+        " margin-left: 6px; vertical-align: middle; letter-spacing: 0.3px; }\n"
+        ".trend-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;"
+        " margin-bottom: 12px; }\n"
+        ".trend-controls select { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px;"
+        " font-size: 12px; max-width: 360px; }\n"
         "</style>\n"
         "</head>\n"
         "<body>\n"
@@ -715,27 +764,48 @@ def generate_dashboard(rows=None):
         "  <div style='position:relative;height:300px;'><canvas id='chartPxkg'></canvas></div>\n"
         "</div>\n"
         "<div class='chart-wrap'>\n"
+        "  <div class='section-title'>Évolution dans le temps (EUR/kg protéine)</div>\n"
+        "  <div class='trend-controls'>\n"
+        "    <label style='font-size:12px;color:#555'>Produit&nbsp;:</label>\n"
+        "    <select id='trendSelect'></select>\n"
+        "    <span id='trendInfo' style='font-size:11px;color:#888'></span>\n"
+        "  </div>\n"
+        "  <div style='position:relative;height:280px;'><canvas id='chartTrend'></canvas></div>\n"
+        "</div>\n"
+        "<div class='chart-wrap'>\n"
         "  <div class='section-title'>Données complètes</div>\n"
+        "  <div class='table-toolbar'>\n"
+        "    <input id='searchInput' class='search-input' type='text' placeholder='Rechercher un produit...'>\n"
+        "    <span id='rowCount' style='font-size:11px;color:#888'></span>\n"
+        "  </div>\n"
         "  <table id='detailTable'><thead><tr>\n"
-        "    <th style='width:28%'>Produit</th><th style='width:8%'>Taille</th>\n"
-        "    <th style='width:8%;text-align:right'>Prix</th>\n"
-        "    <th style='width:7%;text-align:right'>%Prot</th>\n"
-        "    <th style='width:11%;text-align:right'>EUR/kg prot</th>\n"
-        "    <th style='width:11%;text-align:right'>EUR/30g prot</th>\n"
-        "    <th style='width:11%;text-align:right' title='Coût pour 3g de leucine (seuil anabolique)'>EUR/3g leu</th>\n"
-        "    <th style='width:9%;text-align:right'>EUR/kg</th>\n"
-        "    <th style='width:9%;text-align:right'>EUR/portion</th>\n"
-        "    <th style='width:9%;text-align:right'>Date</th>\n"
+        "    <th class='sortable' data-key='produit' style='width:26%'>Produit<span class='sort-arrow'>↕</span></th>\n"
+        "    <th class='sortable' data-key='taille' style='width:7%'>Taille<span class='sort-arrow'>↕</span></th>\n"
+        "    <th class='sortable' data-key='prix' style='width:7%;text-align:right'>Prix<span class='sort-arrow'>↕</span></th>\n"
+        "    <th class='sortable' data-key='prot' style='width:6%;text-align:right'>%Prot<span class='sort-arrow'>↕</span></th>\n"
+        "    <th class='sortable' data-key='pxkgProt' style='width:11%;text-align:right'>EUR/kg prot<span class='sort-arrow'>↕</span></th>\n"
+        "    <th class='sortable' data-key='cout30' style='width:11%;text-align:right'>EUR/30g prot<span class='sort-arrow'>↕</span></th>\n"
+        "    <th class='sortable' data-key='cout3leu' style='width:11%;text-align:right' title='Coût pour 3g de leucine (seuil anabolique)'>EUR/3g leu<span class='sort-arrow'>↕</span></th>\n"
+        "    <th class='sortable' data-key='pxkg' style='width:8%;text-align:right'>EUR/kg<span class='sort-arrow'>↕</span></th>\n"
+        "    <th class='sortable' data-key='cout' style='width:8%;text-align:right'>EUR/portion<span class='sort-arrow'>↕</span></th>\n"
+        "    <th class='sortable' data-key='date' style='width:5%;text-align:right'>Date<span class='sort-arrow'>↕</span></th>\n"
         "  </tr></thead><tbody id='tableBody'></tbody></table>\n"
         "</div>\n"
         f"<script>\nconst RAW = {data_json};\n"
+        f"const HISTORY = {history_json};\n"
         "const COLORS = {'500g':'#378ADD','750g':'#1D9E75','2Kg':'#7F77DD','Unique':'#D85A30'};\n"
         "const PRODUCTS = [...new Set(RAW.map(r=>r.produit))];\n"
         "const SIZES = [...new Set(RAW.map(r=>r.taille))];\n"
         "let currentSize = 'all';\n"
-        "let chartPxkgProt, chartCout30, chartPxkg;\n"
+        "let searchQuery = '';\n"
+        "let sortKey = 'pxkgProt', sortAsc = true;\n"
+        "let chartPxkgProt, chartCout30, chartPxkg, chartTrend;\n"
         "function fmt(v,d=2,suf=' EUR'){return v!=null?Number(v).toFixed(d)+suf:'—';}\n"
-        "function getFiltered(){return currentSize==='all'?RAW:RAW.filter(r=>r.taille===currentSize);}\n"
+        "function getFiltered(){\n"
+        "  let f = currentSize==='all'?RAW:RAW.filter(r=>r.taille===currentSize);\n"
+        "  if(searchQuery){const q=searchQuery.toLowerCase();f=f.filter(r=>r.produit.toLowerCase().includes(q));}\n"
+        "  return f;\n"
+        "}\n"
         "function shortName(p){return p.length>32?p.slice(0,30)+'…':p;}\n"
         "function buildDatasets(key){\n"
         "  const sizes=currentSize==='all'?SIZES:[currentSize];\n"
@@ -768,13 +838,25 @@ def generate_dashboard(rows=None):
         "  chartPxkgProt.update();chartCout30.update();chartPxkg.update();\n"
         "  buildLegend('legendPxkgProt');buildLegend('legendCout30');buildLegend('legendPxkg');\n"
         "}\n"
+        "function compareValues(a,b,k){\n"
+        "  const av=a[k], bv=b[k];\n"
+        "  if(av==null && bv==null) return 0;\n"
+        "  if(av==null) return 1;\n"
+        "  if(bv==null) return -1;\n"
+        "  if(typeof av === 'number' && typeof bv === 'number') return av-bv;\n"
+        "  return String(av).localeCompare(String(bv));\n"
+        "}\n"
         "function updateTable(){\n"
-        "  const f=getFiltered();\n"
+        "  let f=getFiltered();\n"
+        "  f=[...f].sort((a,b)=>{const c=compareValues(a,b,sortKey);return sortAsc?c:-c;});\n"
         "  const mnPxP=Math.min(...f.filter(r=>r.pxkgProt).map(r=>r.pxkgProt));\n"
         "  const mnC30=Math.min(...f.filter(r=>r.cout30).map(r=>r.cout30));\n"
         "  const mnC3L=Math.min(...f.filter(r=>r.cout3leu).map(r=>r.cout3leu));\n"
-        "  document.getElementById('tableBody').innerHTML=f.map((r,i)=>`\n"
-        "    <tr><td title='${r.produit}'><a href='${r.url}' target='_blank'>${r.produit}</a></td>\n"
+        "  document.getElementById('rowCount').textContent=`${f.length} ligne(s)`;\n"
+        "  document.getElementById('tableBody').innerHTML=f.map((r,i)=>{\n"
+        "    const dealBadge = r.isDeal ? `<span class='deal-badge' title='Sous la moyenne historique de plus de 5%'>🔥 DEAL</span>` : '';\n"
+        "    return `<tr>\n"
+        "    <td title='${r.produit}'><a href='${r.url}' target='_blank'>${r.produit}</a>${dealBadge}</td>\n"
         "    <td>${r.taille}</td>\n"
         "    <td style='text-align:right'>${fmt(r.prix)}</td>\n"
         "    <td style='text-align:right'>${r.prot!=null?Number(r.prot).toFixed(0)+'%':'—'}</td>\n"
@@ -784,7 +866,53 @@ def generate_dashboard(rows=None):
         "    <td style='text-align:right'>${fmt(r.pxkg)}</td>\n"
         "    <td style='text-align:right'>${fmt(r.cout)}</td>\n"
         "    <td style='text-align:right;font-size:11px;color:#888'>${r.date}</td>\n"
-        "    </tr>`).join('');\n"
+        "    </tr>`;\n"
+        "  }).join('');\n"
+        "}\n"
+        "function updateSortHeaders(){\n"
+        "  document.querySelectorAll('th.sortable').forEach(th=>{\n"
+        "    th.classList.remove('sort-asc','sort-desc');\n"
+        "    if(th.dataset.key===sortKey){th.classList.add(sortAsc?'sort-asc':'sort-desc');\n"
+        "      th.querySelector('.sort-arrow').textContent=sortAsc?'↑':'↓';}\n"
+        "    else{th.querySelector('.sort-arrow').textContent='↕';}\n"
+        "  });\n"
+        "}\n"
+        "function setupSort(){\n"
+        "  document.querySelectorAll('th.sortable').forEach(th=>{\n"
+        "    th.addEventListener('click',()=>{\n"
+        "      const k=th.dataset.key;\n"
+        "      if(sortKey===k){sortAsc=!sortAsc;}else{sortKey=k;sortAsc=true;}\n"
+        "      updateSortHeaders();updateTable();\n"
+        "    });\n"
+        "  });\n"
+        "}\n"
+        "function setupSearch(){\n"
+        "  document.getElementById('searchInput').addEventListener('input',e=>{\n"
+        "    searchQuery=e.target.value.trim();updateTable();\n"
+        "  });\n"
+        "}\n"
+        "function buildTrendOptions(){\n"
+        "  const sel=document.getElementById('trendSelect');\n"
+        "  sel.innerHTML=HISTORY.map((h,i)=>`<option value='${i}'>${h.produit} — ${h.taille} (${h.points.length} pts)</option>`).join('');\n"
+        "  if(HISTORY.length===0){sel.innerHTML='<option>Pas assez de données (besoin de 2+ jours)</option>';}\n"
+        "}\n"
+        "function buildTrendChart(){\n"
+        "  if(HISTORY.length===0){return;}\n"
+        "  const idx=parseInt(document.getElementById('trendSelect').value)||0;\n"
+        "  const h=HISTORY[idx];\n"
+        "  if(!h){return;}\n"
+        "  const labels=h.points.map(p=>p.date);\n"
+        "  const data=h.points.map(p=>p.pxkgProt);\n"
+        "  document.getElementById('trendInfo').textContent=`${h.produit} ${h.taille} — ${h.points.length} relevés`;\n"
+        "  if(chartTrend){chartTrend.destroy();}\n"
+        "  chartTrend=new Chart(document.getElementById('chartTrend'),{\n"
+        "    type:'line',\n"
+        "    data:{labels,datasets:[{label:'EUR/kg protéine',data,borderColor:'#378ADD',backgroundColor:'rgba(55,138,221,0.1)',tension:0.2,pointRadius:4,fill:true}]},\n"
+        "    options:COPTS()\n"
+        "  });\n"
+        "}\n"
+        "function setupTrend(){\n"
+        "  document.getElementById('trendSelect').addEventListener('change',buildTrendChart);\n"
         "}\n"
         "function buildMetrics(){\n"
         "  const wpp=RAW.filter(r=>r.pxkgProt);\n"
@@ -811,7 +939,9 @@ def generate_dashboard(rows=None):
         " onclick='filterSize(\"${sz}\")'>${sz==='all'?'Toutes':sz}</button>`).join('');\n"
         "}\n"
         "function filterSize(sz){currentSize=sz;buildFilters();updateCharts();updateTable();}\n"
-        "buildMetrics();buildFilters();initCharts();updateTable();\n"
+        "buildMetrics();buildFilters();initCharts();\n"
+        "buildTrendOptions();buildTrendChart();setupTrend();\n"
+        "setupSort();setupSearch();updateSortHeaders();updateTable();\n"
         "</script>\n"
         "</body>\n"
         "</html>\n"
