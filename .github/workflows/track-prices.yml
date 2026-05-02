@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write  # nécessaire pour commit + push
 
+# Force les actions JavaScript sur Node 24 (Node 20 sera retiré en sept 2026)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: track-prices
   cancel-in-progress: false

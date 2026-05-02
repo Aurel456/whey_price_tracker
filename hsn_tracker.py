@@ -94,10 +94,12 @@ HEADERS    = [
     "Ingrédients", "Profil AA (JSON)",
     # Score qualitatif : seuil anabolique = 3g leucine
     "Coût/3g leucine (€)",
+    # Catégorie : Whey / Aliments enrichis / Autres (déduite du % de protéine)
+    "Catégorie",
 ]
 COL_WIDTHS = [12, 45, 50, 12, 12, 10, 18, 15, 12, 60, 50,
               18, 18, 16, 18, 16, 16, 14, 16, 16, 14, 80, 60,
-              18]
+              18, 18]
 
 
 # ── Excel helpers ─────────────────────────────────────────────────────────────
@@ -183,6 +185,7 @@ def append_rows(rows: list):
             r.get("ingredients", ""),
             json.dumps(aa, ensure_ascii=False) if aa else "",
             r.get("cout_3g_leucine"),
+            r.get("categorie", ""),
         ]
         row_fill = ALT_FILL if i % 2 == 0 else None
         for col, val in enumerate(data, start=1):
@@ -370,6 +373,22 @@ async def extract_nutrition_data(page) -> dict:
     }
 
 
+def _detect_category(prot_per_100g) -> str:
+    """Catégorise un produit selon sa teneur en protéines pour 100g.
+
+    - Whey : >= 70% (whey isolat / hydrolysat / concentré pur)
+    - Aliments enrichis : 30-70% (mix avec glucides/fibres : oats, smoothies, riz)
+    - Autres : < 30% ou inconnu (à investiguer)
+    """
+    if prot_per_100g is None:
+        return ""
+    if prot_per_100g >= 70:
+        return "Whey"
+    if prot_per_100g >= 30:
+        return "Aliments enrichis"
+    return "Autres"
+
+
 def _compute_protein_costs(px_kg, prot_per_100g, leucine_mg_per_100g=None):
     """Calcule prix/kg protéine, coût/30g protéine, et coût/3g leucine (seuil anabolique)."""
     if px_kg is None or not prot_per_100g:
@@ -461,6 +480,7 @@ def _enrich_row(row: dict, nutri: dict) -> dict:
     row["px_kg_proteine"] = px_kg_prot
     row["cout_30g_proteine"] = cout_30g
     row["cout_3g_leucine"] = cout_3g_leu
+    row["categorie"] = _detect_category(n.get("proteines_100g"))
 
     # Sanity check : un whey doit avoir entre PROT_MIN_PCT et PROT_MAX_PCT de protéines
     prot = n.get("proteines_100g")
@@ -665,14 +685,18 @@ def generate_dashboard(rows=None):
             "avgPxkgProt": meta.get("avg"),
             "isDeal":      meta.get("isDeal", False),
             "histLen":     meta.get("histLen", 0),
+            "categorie":   str(r.get("Catégorie") or _detect_category(r.get("Protéines (g/100g)"))),
         })
 
     # Sérialise l'historique pour les courbes de tendance
+    # Catégorie reprise depuis le snapshot le plus récent (chart_rows / latest)
+    cat_by_key = {(c["produit"], c["taille"]): c["categorie"] for c in chart_rows}
     history_json_data = [
         {
-            "produit": k[0],
-            "taille":  k[1],
-            "points":  v,
+            "produit":   k[0],
+            "taille":    k[1],
+            "categorie": cat_by_key.get(k, ""),
+            "points":    v,
         }
         for k, v in history_by_key.items()
         if len(v) >= 2  # courbe seulement si au moins 2 points
@@ -747,6 +771,7 @@ def generate_dashboard(rows=None):
         f"<p class='sub'>Derniere mise a jour : {today_str} &nbsp;|&nbsp; "
         f"{len(all_products)} produits &nbsp;|&nbsp; {len(dates)} jour(s) de donnees</p>\n"
         "<div class='cards' id='metricCards'></div>\n"
+        "<div class='filters' id='categoryFilters'></div>\n"
         "<div class='filters' id='filters'></div>\n"
         "<div class='chart-wrap'>\n"
         "  <div class='section-title'>Prix par kilo de protéine pure (EUR/kg)</div>\n"
@@ -794,24 +819,31 @@ def generate_dashboard(rows=None):
         f"<script>\nconst RAW = {data_json};\n"
         f"const HISTORY = {history_json};\n"
         "const COLORS = {'500g':'#378ADD','750g':'#1D9E75','2Kg':'#7F77DD','Unique':'#D85A30'};\n"
+        "const CAT_ORDER = ['Whey','Aliments enrichis','Autres'];\n"
+        "const CATEGORIES = CAT_ORDER.filter(c=>RAW.some(r=>r.categorie===c)).concat([...new Set(RAW.map(r=>r.categorie).filter(c=>c && !CAT_ORDER.includes(c)))]);\n"
         "const PRODUCTS = [...new Set(RAW.map(r=>r.produit))];\n"
         "const SIZES = [...new Set(RAW.map(r=>r.taille))];\n"
         "let currentSize = 'all';\n"
+        "let currentCategory = 'Whey';\n"  # default: Whey only (purist view)
         "let searchQuery = '';\n"
         "let sortKey = 'pxkgProt', sortAsc = true;\n"
         "let chartPxkgProt, chartCout30, chartPxkg, chartTrend;\n"
         "function fmt(v,d=2,suf=' EUR'){return v!=null?Number(v).toFixed(d)+suf:'—';}\n"
         "function getFiltered(){\n"
-        "  let f = currentSize==='all'?RAW:RAW.filter(r=>r.taille===currentSize);\n"
+        "  let f = RAW;\n"
+        "  if(currentCategory!=='all'){f=f.filter(r=>r.categorie===currentCategory);}\n"
+        "  if(currentSize!=='all'){f=f.filter(r=>r.taille===currentSize);}\n"
         "  if(searchQuery){const q=searchQuery.toLowerCase();f=f.filter(r=>r.produit.toLowerCase().includes(q));}\n"
         "  return f;\n"
         "}\n"
         "function shortName(p){return p.length>32?p.slice(0,30)+'…':p;}\n"
+        "function getFilteredProducts(){return [...new Set(getFiltered().map(r=>r.produit))];}\n"
         "function buildDatasets(key){\n"
+        "  const products=getFilteredProducts();\n"
         "  const sizes=currentSize==='all'?SIZES:[currentSize];\n"
         "  return sizes.map(sz=>({\n"
         "    label:sz,\n"
-        "    data:PRODUCTS.map(pr=>{const r=RAW.find(x=>x.produit===pr&&x.taille===sz);return r?r[key]:null;}),\n"
+        "    data:products.map(pr=>{const r=RAW.find(x=>x.produit===pr&&x.taille===sz&&(currentCategory==='all'||x.categorie===currentCategory));return r?r[key]:null;}),\n"
         "    backgroundColor:COLORS[sz]||'#888',borderRadius:4,borderSkipped:false\n"
         "  }));\n"
         "}\n"
@@ -826,18 +858,26 @@ def generate_dashboard(rows=None):
         "  document.getElementById(id).innerHTML=sizes.map(sz=>`<span><span class='legend-dot' style='background:${COLORS[sz]||\"#888\"}'></span>${sz}</span>`).join('');\n"
         "}\n"
         "function initCharts(){\n"
-        "  chartPxkgProt=new Chart(document.getElementById('chartPxkgProt'),{type:'bar',data:{labels:PRODUCTS.map(shortName),datasets:buildDatasets('pxkgProt')},options:COPTS()});\n"
-        "  chartCout30=new Chart(document.getElementById('chartCout30'),{type:'bar',data:{labels:PRODUCTS.map(shortName),datasets:buildDatasets('cout30')},options:COPTS(' EUR',3)});\n"
-        "  chartPxkg=new Chart(document.getElementById('chartPxkg'),{type:'bar',data:{labels:PRODUCTS.map(shortName),datasets:buildDatasets('pxkg')},options:COPTS()});\n"
+        "  const labels=getFilteredProducts().map(shortName);\n"
+        "  chartPxkgProt=new Chart(document.getElementById('chartPxkgProt'),{type:'bar',data:{labels,datasets:buildDatasets('pxkgProt')},options:COPTS()});\n"
+        "  chartCout30=new Chart(document.getElementById('chartCout30'),{type:'bar',data:{labels,datasets:buildDatasets('cout30')},options:COPTS(' EUR',3)});\n"
+        "  chartPxkg=new Chart(document.getElementById('chartPxkg'),{type:'bar',data:{labels,datasets:buildDatasets('pxkg')},options:COPTS()});\n"
         "  buildLegend('legendPxkgProt');buildLegend('legendCout30');buildLegend('legendPxkg');\n"
         "}\n"
         "function updateCharts(){\n"
-        "  chartPxkgProt.data.datasets=buildDatasets('pxkgProt');\n"
-        "  chartCout30.data.datasets=buildDatasets('cout30');\n"
-        "  chartPxkg.data.datasets=buildDatasets('pxkg');\n"
-        "  chartPxkgProt.update();chartCout30.update();chartPxkg.update();\n"
+        "  const labels=getFilteredProducts().map(shortName);\n"
+        "  [chartPxkgProt,chartCout30,chartPxkg].forEach((c,i)=>{\n"
+        "    c.data.labels=labels;\n"
+        "    c.data.datasets=buildDatasets(['pxkgProt','cout30','pxkg'][i]);\n"
+        "    c.update();\n"
+        "  });\n"
         "  buildLegend('legendPxkgProt');buildLegend('legendCout30');buildLegend('legendPxkg');\n"
         "}\n"
+        "function buildCategoryFilters(){\n"
+        "  const cats=['all',...CATEGORIES];\n"
+        "  document.getElementById('categoryFilters').innerHTML=cats.map(c=>`<button class='filter-btn ${c===currentCategory?\"active\":\"\"}' onclick='filterCategory(\"${c}\")'>${c==='all'?'Toutes catégories':c}</button>`).join('');\n"
+        "}\n"
+        "function filterCategory(c){currentCategory=c;buildCategoryFilters();updateCharts();updateTable();buildTrendOptions();buildTrendChart();}\n"
         "function compareValues(a,b,k){\n"
         "  const av=a[k], bv=b[k];\n"
         "  if(av==null && bv==null) return 0;\n"
@@ -893,8 +933,9 @@ def generate_dashboard(rows=None):
         "}\n"
         "function buildTrendOptions(){\n"
         "  const sel=document.getElementById('trendSelect');\n"
-        "  sel.innerHTML=HISTORY.map((h,i)=>`<option value='${i}'>${h.produit} — ${h.taille} (${h.points.length} pts)</option>`).join('');\n"
-        "  if(HISTORY.length===0){sel.innerHTML='<option>Pas assez de données (besoin de 2+ jours)</option>';}\n"
+        "  const filtered=HISTORY.map((h,i)=>({h,i})).filter(x=>currentCategory==='all'||x.h.categorie===currentCategory);\n"
+        "  sel.innerHTML=filtered.map(({h,i})=>`<option value='${i}'>${h.produit} — ${h.taille} (${h.points.length} pts)</option>`).join('');\n"
+        "  if(filtered.length===0){sel.innerHTML='<option>Pas assez de données (besoin de 2+ jours)</option>';}\n"
         "}\n"
         "function buildTrendChart(){\n"
         "  if(HISTORY.length===0){return;}\n"
@@ -938,8 +979,8 @@ def generate_dashboard(rows=None):
         "    <button class='filter-btn ${sz===currentSize?\"active\":\"\"}'"
         " onclick='filterSize(\"${sz}\")'>${sz==='all'?'Toutes':sz}</button>`).join('');\n"
         "}\n"
-        "function filterSize(sz){currentSize=sz;buildFilters();updateCharts();updateTable();}\n"
-        "buildMetrics();buildFilters();initCharts();\n"
+        "function filterSize(sz){currentSize=sz;buildFilters();updateCharts();updateTable();buildTrendOptions();buildTrendChart();}\n"
+        "buildMetrics();buildCategoryFilters();buildFilters();initCharts();\n"
         "buildTrendOptions();buildTrendChart();setupTrend();\n"
         "setupSort();setupSearch();updateSortHeaders();updateTable();\n"
         "</script>\n"
