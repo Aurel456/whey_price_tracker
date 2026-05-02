@@ -24,6 +24,13 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 # ── Configuration ─────────────────────────────────────────────────────────────
 EXCEL_PATH       = Path(__file__).parent / "whey_prices.xlsx"
 DESCRIPTIONS_PATH = Path(__file__).parent / "descriptions.json"
+ERROR_LOG_PATH   = Path(__file__).parent / "errors.log"
+
+# Sanity checks : un whey doit avoir un % de protéine entre ces bornes
+PROT_MIN_PCT = 50.0
+PROT_MAX_PCT = 95.0
+RETRY_ATTEMPTS = 1     # nb de retentatives en cas d'échec scraping
+RETRY_DELAY_MS = 2_000
 
 CATEGORY_URLS = [
     "https://www.hsnstore.fr/nutrition-sportive/proteines/whey",
@@ -56,6 +63,14 @@ PORT_RE = re.compile(
     r'(?:\s*\|\s*PX/KG:\s*([\d,\s\xa0]+€))?'
 )
 
+# ── Logging d'erreurs ─────────────────────────────────────────────────────────
+def log_error(url: str, reason: str) -> None:
+    """Append une ligne dans errors.log avec timestamp + url + raison."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with ERROR_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(f"[{ts}] {url}\n   {reason}\n")
+
+
 # ── Excel styles ──────────────────────────────────────────────────────────────
 HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
 HEADER_FONT = Font(bold=True, color="FFFFFF", name="Arial", size=10)
@@ -77,9 +92,12 @@ HEADERS    = [
     "Glucides (g/100g)", "Lipides (g/100g)", "Sel (g/100g)",
     "Leucine (mg/100g)", "Isoleucine (mg/100g)", "Valine (mg/100g)",
     "Ingrédients", "Profil AA (JSON)",
+    # Score qualitatif : seuil anabolique = 3g leucine
+    "Coût/3g leucine (€)",
 ]
 COL_WIDTHS = [12, 45, 50, 12, 12, 10, 18, 15, 12, 60, 50,
-              18, 18, 16, 18, 16, 16, 14, 16, 16, 14, 80, 60]
+              18, 18, 16, 18, 16, 16, 14, 16, 16, 14, 80, 60,
+              18]
 
 
 # ── Excel helpers ─────────────────────────────────────────────────────────────
@@ -164,6 +182,7 @@ def append_rows(rows: list):
             aa.get("L-Valine") or aa.get("Valine"),
             r.get("ingredients", ""),
             json.dumps(aa, ensure_ascii=False) if aa else "",
+            r.get("cout_3g_leucine"),
         ]
         row_fill = ALT_FILL if i % 2 == 0 else None
         for col, val in enumerate(data, start=1):
@@ -351,16 +370,22 @@ async def extract_nutrition_data(page) -> dict:
     }
 
 
-def _compute_protein_costs(px_kg, prot_per_100g):
-    """Calcule prix/kg de protéine pure et coût pour 30g de protéine."""
+def _compute_protein_costs(px_kg, prot_per_100g, leucine_mg_per_100g=None):
+    """Calcule prix/kg protéine, coût/30g protéine, et coût/3g leucine (seuil anabolique)."""
     if px_kg is None or not prot_per_100g:
-        return None, None
+        return None, None, None
     ratio = prot_per_100g / 100.0
     if ratio <= 0:
-        return None, None
+        return None, None, None
     px_kg_prot = round(px_kg / ratio, 2)
     cout_30g = round(px_kg_prot * 0.030, 3)
-    return px_kg_prot, cout_30g
+    # Coût pour atteindre 3g de leucine (seuil de stimulation MPS)
+    cout_3g_leu = None
+    if leucine_mg_per_100g and leucine_mg_per_100g > 0:
+        # px_kg = €/kg produit ; leucine_mg/100g → leucine_g/kg = leucine_mg / 100
+        leucine_g_per_kg = leucine_mg_per_100g / 100.0
+        cout_3g_leu = round(px_kg / leucine_g_per_kg * 3.0, 3)
+    return px_kg_prot, cout_30g, cout_3g_leu
 
 
 async def dismiss_cookie_popup(page) -> None:
@@ -406,18 +431,45 @@ async def get_product_urls(page, category_urls: list) -> list:
 
 
 SIZE_EXCLUDE_RE = re.compile(r'monodose|pack', re.IGNORECASE)
+SIZE_KG_RE = re.compile(r'(\d+(?:[\.,]\d+)?)\s*([Kk]?[Gg])')
+
+
+def _parse_size_kg(label: str):
+    """Parse '500g' / '1Kg' / '2Kg' → poids en kg (float)."""
+    if not label:
+        return None
+    m = SIZE_KG_RE.match(label.strip())
+    if not m:
+        return None
+    val = float(m.group(1).replace(",", "."))
+    unit = m.group(2).lower()
+    return val if unit.startswith("k") else val / 1000
 
 
 def _enrich_row(row: dict, nutri: dict) -> dict:
     """Ajoute nutrition + acides aminés + coût protéine à une ligne."""
     n = nutri.get("nutrition", {})
-    row["amino_acids"] = nutri.get("amino_acids", {})
+    aa = nutri.get("amino_acids", {})
+    row["amino_acids"] = aa
     row["ingredients"] = nutri.get("ingredients", "")
     row.update(n)
     px_kg = _to_float(row.get("px_kg"))
-    px_kg_prot, cout_30g = _compute_protein_costs(px_kg, n.get("proteines_100g"))
+    leucine = aa.get("L-Leucine") or aa.get("Leucine")
+    px_kg_prot, cout_30g, cout_3g_leu = _compute_protein_costs(
+        px_kg, n.get("proteines_100g"), leucine
+    )
     row["px_kg_proteine"] = px_kg_prot
     row["cout_30g_proteine"] = cout_30g
+    row["cout_3g_leucine"] = cout_3g_leu
+
+    # Sanity check : un whey doit avoir entre PROT_MIN_PCT et PROT_MAX_PCT de protéines
+    prot = n.get("proteines_100g")
+    if prot is not None and not (PROT_MIN_PCT <= prot <= PROT_MAX_PCT):
+        log_error(
+            row.get("url", "?"),
+            f"Protéine suspecte : {prot}g/100g hors [{PROT_MIN_PCT};{PROT_MAX_PCT}] "
+            f"(taille={row.get('size','?')}) — possible erreur de parsing"
+        )
     return row
 
 
@@ -443,13 +495,41 @@ async def scrape_product(page, url: str) -> list:
         # Nutrition / AA / ingrédients : 1× par produit (identique sur toutes les tailles)
         nutri = await extract_nutrition_data(page)
 
+        # Méthode legacy : inputs super_attribute (radio/checkbox)
         sizes = await page.evaluate("""() =>
             Array.from(document.querySelectorAll('input[name*="super_attribute"]')).map(i => ({
+                kind: 'input',
                 value: i.value,
                 id: i.id,
                 label: document.querySelector('label[for="' + i.id + '"]')?.innerText?.trim()
             })).filter(s => s.label)
         """)
+
+        # Méthode actuelle (HSN ~2025+) : <select id="selectProductSimple"> avec
+        # options du type "EVOCLEAR HYDRO 1Kg ANANAS" — on groupe par taille
+        if not sizes:
+            variants = await page.evaluate(r"""() =>
+                Array.from(document.querySelectorAll('#selectProductSimple option, select.select-product option'))
+                    .map(o => ({sku: o.value, text: (o.textContent || '').trim()}))
+                    .filter(o => o.sku && o.text && !/Sélectionnez/i.test(o.text))
+            """)
+            size_re = re.compile(r'(\d+(?:[\.,]\d+)?\s*[Kk]?[Gg])')
+            by_size = {}
+            for v in variants:
+                # Exclure les variantes Monodose / Pack au niveau du texte complet
+                if SIZE_EXCLUDE_RE.search(v["text"]):
+                    continue
+                m = size_re.search(v["text"])
+                if not m:
+                    continue
+                sz_label = m.group(1).strip().replace(" ", "")  # "1 Kg" → "1Kg"
+                if sz_label not in by_size:
+                    by_size[sz_label] = v["sku"]
+            sizes = [
+                {"kind": "select", "sku": sku, "label": sz}
+                for sz, sku in by_size.items()
+            ]
+
         # Exclure les tailles Monodose / Pack
         sizes = [s for s in sizes if not SIZE_EXCLUDE_RE.search(s["label"])]
 
@@ -467,16 +547,37 @@ async def scrape_product(page, url: str) -> list:
             return results
 
         for sz in sizes:
-            price_amount = option_price_map.get(sz["value"])
-            try:
-                await page.click(f'label[for="{sz["id"]}"]')
-                await page.wait_for_timeout(CLICK_WAIT)
-            except Exception:
-                pass
+            price_str = None
+            if sz.get("kind") == "input":
+                # Legacy : click sur label
+                price_amount = option_price_map.get(sz["value"])
+                try:
+                    await page.click(f'label[for="{sz["id"]}"]')
+                    await page.wait_for_timeout(CLICK_WAIT)
+                except Exception:
+                    pass
+                if price_amount is not None:
+                    price_str = f"{price_amount:.2f}"
+            else:
+                # Select : prix depuis spconfig.optionPrices (keyed by SKU)
+                if spconfig:
+                    op = spconfig.get("optionPrices", {})
+                    fp = op.get(str(sz["sku"]), {}).get("finalPrice", {}).get("amount")
+                    if fp is not None:
+                        price_str = f"{fp:.2f}"
 
-            text = await page.evaluate("document.body.innerText")
-            port_data = parse_port_line(text)
-            price_str = f"{price_amount:.2f}" if price_amount is not None else None
+            # Port data : seulement fiable après un click (legacy).
+            # Pour les selects, on calcule px_kg nous-mêmes depuis prix/poids.
+            if sz.get("kind") == "select":
+                size_kg = _parse_size_kg(sz["label"])
+                px_val = _to_float(price_str)
+                port_data = {}
+                if px_val is not None and size_kg:
+                    px_kg_val = px_val / size_kg
+                    port_data["px_kg"] = f"{px_kg_val:.2f} €"
+            else:
+                text = await page.evaluate("document.body.innerText")
+                port_data = parse_port_line(text)
 
             row = {
                 "name": name, "url": url, "size": sz["label"],
@@ -538,6 +639,7 @@ def generate_dashboard(rows=None):
             "pxkgProt": r.get("Prix/kg protéine (€)"),
             "cout30":   r.get("Cout/30g protéine (€)") or r.get("Coût/30g protéine (€)"),
             "prot":     r.get("Protéines (g/100g)"),
+            "cout3leu": r.get("Cout/3g leucine (€)") or r.get("Coût/3g leucine (€)"),
         }
         for r in latest.values()
     ]
@@ -620,6 +722,7 @@ def generate_dashboard(rows=None):
         "    <th style='width:7%;text-align:right'>%Prot</th>\n"
         "    <th style='width:11%;text-align:right'>EUR/kg prot</th>\n"
         "    <th style='width:11%;text-align:right'>EUR/30g prot</th>\n"
+        "    <th style='width:11%;text-align:right' title='Coût pour 3g de leucine (seuil anabolique)'>EUR/3g leu</th>\n"
         "    <th style='width:9%;text-align:right'>EUR/kg</th>\n"
         "    <th style='width:9%;text-align:right'>EUR/portion</th>\n"
         "    <th style='width:9%;text-align:right'>Date</th>\n"
@@ -669,6 +772,7 @@ def generate_dashboard(rows=None):
         "  const f=getFiltered();\n"
         "  const mnPxP=Math.min(...f.filter(r=>r.pxkgProt).map(r=>r.pxkgProt));\n"
         "  const mnC30=Math.min(...f.filter(r=>r.cout30).map(r=>r.cout30));\n"
+        "  const mnC3L=Math.min(...f.filter(r=>r.cout3leu).map(r=>r.cout3leu));\n"
         "  document.getElementById('tableBody').innerHTML=f.map((r,i)=>`\n"
         "    <tr><td title='${r.produit}'><a href='${r.url}' target='_blank'>${r.produit}</a></td>\n"
         "    <td>${r.taille}</td>\n"
@@ -676,6 +780,7 @@ def generate_dashboard(rows=None):
         "    <td style='text-align:right'>${r.prot!=null?Number(r.prot).toFixed(0)+'%':'—'}</td>\n"
         "    <td style='text-align:right' class='${r.pxkgProt===mnPxP?\"best-cell\":\"\"}'>${fmt(r.pxkgProt)}</td>\n"
         "    <td style='text-align:right' class='${r.cout30===mnC30?\"best-cell\":\"\"}'>${fmt(r.cout30,3)}</td>\n"
+        "    <td style='text-align:right' class='${r.cout3leu===mnC3L?\"best-cell\":\"\"}'>${fmt(r.cout3leu,3)}</td>\n"
         "    <td style='text-align:right'>${fmt(r.pxkg)}</td>\n"
         "    <td style='text-align:right'>${fmt(r.cout)}</td>\n"
         "    <td style='text-align:right;font-size:11px;color:#888'>${r.date}</td>\n"
@@ -684,15 +789,18 @@ def generate_dashboard(rows=None):
         "function buildMetrics(){\n"
         "  const wpp=RAW.filter(r=>r.pxkgProt);\n"
         "  const wc30=RAW.filter(r=>r.cout30);\n"
+        "  const w3l=RAW.filter(r=>r.cout3leu);\n"
         "  const wpx=RAW.filter(r=>r.pxkg);\n"
         "  const bestProt=wpp.length?wpp.reduce((a,b)=>a.pxkgProt<b.pxkgProt?a:b):null;\n"
         "  const bestC30=wc30.length?wc30.reduce((a,b)=>a.cout30<b.cout30?a:b):null;\n"
+        "  const best3L=w3l.length?w3l.reduce((a,b)=>a.cout3leu<b.cout3leu?a:b):null;\n"
         "  const bestPx=wpx.length?wpx.reduce((a,b)=>a.pxkg<b.pxkg?a:b):null;\n"
         "  const prods=new Set(RAW.map(r=>r.produit)).size;\n"
         "  const cards=[];\n"
         "  cards.push(`<div class='card'><div class='card-label'>Produits</div><div class='card-value'>${prods}</div></div>`);\n"
         "  if(bestProt){cards.push(`<div class='card'><div class='card-label'>Meilleur EUR/kg protéine</div><div class='card-value best'>${bestProt.pxkgProt.toFixed(2)} EUR</div><div class='card-sub'>${bestProt.produit.slice(0,28)} — ${bestProt.taille}</div></div>`);}\n"
         "  if(bestC30){cards.push(`<div class='card'><div class='card-label'>Meilleur 30g protéine</div><div class='card-value best'>${bestC30.cout30.toFixed(3)} EUR</div><div class='card-sub'>${bestC30.produit.slice(0,28)} — ${bestC30.taille}</div></div>`);}\n"
+        "  if(best3L){cards.push(`<div class='card'><div class='card-label' title='Coût pour 3g de leucine (seuil anabolique)'>Meilleur 3g leucine</div><div class='card-value best'>${best3L.cout3leu.toFixed(3)} EUR</div><div class='card-sub'>${best3L.produit.slice(0,28)} — ${best3L.taille}</div></div>`);}\n"
         "  if(bestPx){cards.push(`<div class='card'><div class='card-label'>Meilleur EUR/kg produit</div><div class='card-value' style='font-size:18px'>${bestPx.pxkg.toFixed(2)} EUR</div><div class='card-sub'>${bestPx.produit.slice(0,28)} — ${bestPx.taille}</div></div>`);}\n"
         f"  cards.push(`<div class='card'><div class='card-label'>Mise à jour</div><div class='card-value' style='font-size:16px'>{today_str}</div></div>`);\n"
         "  document.getElementById('metricCards').innerHTML=cards.join('');\n"
@@ -758,11 +866,23 @@ async def main():
             async with sem:
                 short = url.split("/")[-1]
                 print(f"[{idx:02d}/{total}] {short}")
-                worker_page = await context.new_page()
-                try:
-                    return await scrape_product(worker_page, url)
-                finally:
-                    await worker_page.close()
+                last_err = None
+                for attempt in range(RETRY_ATTEMPTS + 1):
+                    worker_page = await context.new_page()
+                    try:
+                        rows = await scrape_product(worker_page, url)
+                        if rows:
+                            return rows
+                        last_err = "résultat vide"
+                    except Exception as e:
+                        last_err = repr(e)
+                    finally:
+                        await worker_page.close()
+                    if attempt < RETRY_ATTEMPTS:
+                        print(f"   ↻ retry {short} ({last_err})")
+                        await asyncio.sleep(RETRY_DELAY_MS / 1000)
+                log_error(url, f"Échec après {RETRY_ATTEMPTS + 1} tentative(s) : {last_err}")
+                return []
 
         batches = await asyncio.gather(
             *(worker(i, u) for i, u in enumerate(product_urls, 1))

@@ -14,6 +14,7 @@ venv/
 # Generated output (regénérés à chaque run)
 whey_prices.xlsx
 whey_dashboard.html
+errors.log
 
 # OS
 .DS_Store
