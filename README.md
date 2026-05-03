@@ -1,6 +1,6 @@
 # HSN Whey Price Tracker
 
-Scrape les prix des whey protéines sur [HSNstore.fr](https://www.hsnstore.fr) et génère un suivi dans un fichier Excel + un dashboard HTML.
+Scrape les prix des whey protéines et produits protéinés sur [HSNstore.fr](https://www.hsnstore.fr) et génère un suivi dans un fichier Excel + un dashboard HTML.
 
 Repo : [github.com/Aurel456/whey_price_tracker](https://github.com/Aurel456/whey_price_tracker)
 
@@ -12,9 +12,10 @@ Repo : [github.com/Aurel456/whey_price_tracker](https://github.com/Aurel456/whey
    - Valeurs nutritionnelles pour 100g (protéines, énergie, glucides, lipides, sel)
    - Profil des 18 acides aminés (mg/100g)
    - Liste d'ingrédients
-3. Calcule le **prix par kilo de protéine pure** et le **coût pour 30g de protéine** (le ratio protéine/produit varie de ~70% à ~90%)
-4. Ajoute les données du jour dans `whey_prices.xlsx` (feuille "Historique")
-5. Génère `whey_dashboard.html` avec 3 graphiques Chart.js : €/kg protéine, coût/30g protéine, €/kg produit
+3. Calcule le **prix par kilo de protéine pure**, le **coût pour 30g de protéine**, et le **coût pour 3g de leucine** (score qualité)
+4. Classe chaque produit en **catégorie** selon son taux de protéines : Whey (≥70%), Aliments enrichis (30–70%), Autres (<30%)
+5. Ajoute les données du jour dans `whey_prices.xlsx` (feuille "Historique")
+6. Génère `whey_dashboard.html` avec graphiques Chart.js, tendances historiques, et badge deal
 
 Les variantes "Monodose" et "Pack" sont automatiquement exclues.
 
@@ -38,19 +39,24 @@ python hsn_tracker.py
 | ------ | --- | --- |
 | `hsn_tracker.py` | Script principal (scraping + Excel + dashboard) | ✓ |
 | `requirements.txt` | Dépendances Python | ✓ |
-| `whey_prices.xlsx` | Historique des prix (créé automatiquement) | ✗ (gitignore) |
-| `whey_dashboard.html` | Dashboard de visualisation (généré automatiquement) | ✗ (gitignore) |
+| `whey_prices.xlsx` | Historique des prix (créé automatiquement) | ✓ |
+| `whey_dashboard.html` | Dashboard de visualisation (généré automatiquement) | ✓ |
 | `descriptions.json` | Descriptions courtes / mots-clés des produits (optionnel) | ✓ |
+
+`whey_prices.xlsx` et `whey_dashboard.html` sont versionnés : chaque mise à jour de prix produit un commit, créant un historique git complet de l'évolution des prix.
 
 ## Dashboard
 
 Le dashboard HTML affiche :
 
-- Cartes récapitulatives : nombre de produits, **meilleur €/kg protéine**, meilleur coût pour 30g de protéine, meilleur €/kg produit
-- Filtre par taille (500g, 750g, 2Kg, etc.)
-- 3 graphiques barres : prix par kg de **protéine pure**, coût pour 30g de protéine, prix par kg de produit
-- Tableau détaillé avec %protéine, €/kg prot, €/30g prot
-- Déduplication automatique : si le même produit a été scrapé plusieurs fois, seule la dernière entrée est affichée
+- **Cartes récapitulatives** : nombre de produits, meilleur €/kg protéine, meilleur coût pour 30g de protéine, meilleur €/kg produit
+- **Filtres** par catégorie (Whey / Aliments enrichis / Autres) et par taille (500g, 750g, 2Kg, etc.)
+- **Recherche** par nom de produit et **tri** par prix, protéines, ou score leucine
+- **3 graphiques barres** : prix par kg de protéine pure, coût pour 30g de protéine, prix par kg de produit
+- **Graphique de tendance** historique par produit (ligne Chart.js)
+- **Badge Deal** : signale les produits dont le prix actuel est inférieur à leur moyenne historique (-5%)
+- **Tableau détaillé** : %protéine, €/kg prot, €/30g prot, coût/3g leucine, catégorie
+- **Déduplication automatique** : si le même produit a été scrapé plusieurs fois, seule la dernière entrée est affichée
 
 ## Configuration
 
@@ -61,8 +67,21 @@ Paramètres ajustables en haut du script :
 | Variable | Défaut | Effet |
 | ------ | --- | --- |
 | `CONCURRENCY` | `4` | Nombre de produits scrapés en parallèle. Baisser à 2-3 si erreurs/timeouts. |
-| `CLICK_WAIT` | `700` | Délai (ms) après clic sur une taille. À augmenter si certaines tailles renvoient des données vides. |
+| `CLICK_WAIT` | `700` | Délai (ms) après sélection d'une taille. À augmenter si certaines tailles renvoient des données vides. |
 | `PAGE_TIMEOUT` | `30000` | Timeout (ms) de chargement d'une page. |
+| `RETRY_ATTEMPTS` | `1` | Nombre de retentatives si un produit échoue (timeout ou résultat vide). |
+| `PROT_MIN_PCT` | `30.0` | Seuil bas du sanity check (%). En dessous : erreur loggée. |
+| `PROT_MAX_PCT` | `95.0` | Seuil haut du sanity check (%). Au-dessus : erreur loggée. |
+
+## Catégories
+
+Les produits sont automatiquement classés selon leur taux de protéines pour 100g :
+
+| Catégorie | Taux de protéines |
+| ------ | --- |
+| Whey | ≥ 70% |
+| Aliments enrichis | 30% – 70% (crème de riz, flocons d'avoine protéinés, etc.) |
+| Autres | < 30% |
 
 ## Versioning (git)
 
@@ -73,8 +92,6 @@ git add hsn_tracker.py README.md       # ou les fichiers modifiés
 git commit -m "description du changement"
 git push
 ```
-
-`whey_prices.xlsx` et `whey_dashboard.html` sont **versionnés** : chaque mise à jour de prix produit un commit, ce qui crée un historique git complet de l'évolution des prix. Les fichiers ignorés par git : `.venv/`, `errors.log`, `.kilo/`, `__pycache__/`.
 
 ## Automatisation cloud (GitHub Actions)
 
@@ -90,6 +107,7 @@ Un workflow [.github/workflows/track-prices.yml](.github/workflows/track-prices.
 
 ## Robustesse
 
-- Retry automatique (1 retentative) sur produit qui timeout ou renvoie un résultat vide
-- Sanity check : un whey doit avoir entre 50% et 95% de protéines, sinon l'erreur est loggée dans `errors.log`
+- Retry automatique (`RETRY_ATTEMPTS=1`) sur produit qui timeout ou renvoie un résultat vide
+- Sanity check : un produit doit avoir entre 30% et 95% de protéines, sinon l'erreur est loggée dans `errors.log`
 - Logs détaillés des échecs dans `errors.log` (timestamp + URL + raison)
+- Blocage des ressources inutiles (images, polices, CSS) pour accélérer le scraping
