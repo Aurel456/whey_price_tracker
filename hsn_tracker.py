@@ -441,7 +441,7 @@ WHEY_TYPE_LABELS = {
     "caseine":     "Caséine",
     "vegetal":     "Végétal",
     "mix":         "Mix protéines",
-    "enzyme":      "Enzymes digestives (DigeZyme®)",
+    "enzyme":      "Enzymes digestives",
 }
 
 
@@ -514,7 +514,7 @@ def _detect_whey_type(ingredients: str, name: str) -> list:
     if "mix" in name_l and "protéines" in name_l:
         out.append("mix")
     # Enzymes digestives : marque DigeZyme® ou mention explicite
-    if "digezyme" in combined or "enzymes digestives" in combined:
+    if "digezyme" in combined or "enzyme" in combined:
         out.append("enzyme")
     return out
 
@@ -759,6 +759,35 @@ def _enrich_row(row: dict, nutri: dict) -> dict:
     return row
 
 
+_STOCK_CHECK_JS = r"""() => {
+    // Check restreint à la zone produit principale (pas tout le body) pour
+    // éviter qu'une variante OOS (ex: Pack) contamine la détection des
+    // autres tailles. Sur Magento/HSN, l'état stock de la variante
+    // SÉLECTIONNÉE se reflète dans .product-info-main / l'add-to-cart.
+    const main = document.querySelector('.product-info-main')
+              || document.querySelector('.product-info-price')
+              || document.querySelector('[data-product-id]')
+              || document.body;
+    if (main.querySelector('.stock.unavailable')) return false;
+    // Bouton "Prévenez-moi quand dispo" visible → OOS
+    const alertBtn = main.querySelector(
+        'button[id*="alert"], a[href*="alert"], .alert-stock, [data-action*="alert"]'
+    );
+    if (alertBtn && alertBtn.offsetParent !== null) return false;
+    // Bouton ajouter au panier : visible et non-disabled → en stock
+    const cart = main.querySelector(
+        '#product-addtocart-button, button.tocart, button.action.tocart'
+    );
+    if (cart) {
+        if (cart.disabled) return false;
+        const style = window.getComputedStyle(cart);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        return true;
+    }
+    return true;
+}"""
+
+
 async def scrape_product(page, url: str) -> list:
     results = []
     try:
@@ -768,16 +797,6 @@ async def scrape_product(page, url: str) -> list:
         except PlaywrightTimeout:
             pass
         await dismiss_cookie_popup(page)
-
-        # Vérifie la disponibilité du produit (une fois par page, pas par variant)
-        en_stock = await page.evaluate("""() => {
-            // Indicateur Magento standard
-            if (document.querySelector('.stock.unavailable')) return false;
-            // Textes spécifiques HSN
-            const body = document.body.innerText;
-            if (/rupture de stock|en rupture|indisponible|pr.venez.moi lorsque le produit sera disponible/i.test(body)) return false;
-            return true;
-        }""")
 
         name = await page.evaluate(
             "document.querySelector('h1.page-title span, h1[itemprop=\"name\"]')"
@@ -835,6 +854,7 @@ async def scrape_product(page, url: str) -> list:
             price_raw = await page.evaluate(
                 "document.querySelector('[data-price-type=\"finalPrice\"] .price')?.innerText || ''"
             )
+            en_stock = await page.evaluate(_STOCK_CHECK_JS)
             row = {
                 "name": name, "url": url, "size": "Unique",
                 "price": _clean(price_raw), "en_stock": en_stock, **port_data,
@@ -861,6 +881,19 @@ async def scrape_product(page, url: str) -> list:
                     fp = op.get(str(sz["sku"]), {}).get("finalPrice", {}).get("amount")
                     if fp is not None:
                         price_str = f"{fp:.2f}"
+                # Sélectionne l'option pour que le DOM reflète l'état stock
+                # de cette variante précise (sinon on lit l'état de la variante
+                # par défaut pour toutes les tailles).
+                for sel in ("#selectProductSimple", "select.select-product"):
+                    try:
+                        await page.select_option(sel, value=str(sz["sku"]))
+                        await page.wait_for_timeout(CLICK_WAIT)
+                        break
+                    except Exception:
+                        continue
+
+            # Stock par variante (après sélection/click).
+            en_stock = await page.evaluate(_STOCK_CHECK_JS)
 
             # Port data : seulement fiable après un click (legacy).
             # Pour les selects, on calcule px_kg nous-mêmes depuis prix/poids.
@@ -881,11 +914,12 @@ async def scrape_product(page, url: str) -> list:
             }
             results.append(_enrich_row(row, nutri))
             short = url.rsplit('/', 1)[-1][:28]
+            stock_flag = "" if en_stock else " [OOS]"
             print(
                 f"    [{short:28s}] {sz['label']:14} | {(price_str or '?'):>8} EUR | "
                 f"PORT:{port_data.get('portions','?'):>4} | "
                 f"PROT:{nutri['nutrition'].get('proteines_100g','?')}g | "
-                f"PX/KG-PROT:{row.get('px_kg_proteine','?')}"
+                f"PX/KG-PROT:{row.get('px_kg_proteine','?')}{stock_flag}"
             )
 
     except PlaywrightTimeout:

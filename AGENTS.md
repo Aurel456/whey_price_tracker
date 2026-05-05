@@ -69,10 +69,12 @@ Notes consolidées des erreurs et apprentissages rencontrés lors du dev. À lir
 
 ## Détection rupture de stock
 
-- HSN n'utilise pas `.stock.unavailable` seul — le texte visible est "rupture de stock" ou "Prévenez-moi lorsque le produit sera disponible" ou "Ce produit est en rupture de stock, mais d'autres clients l'ont acheté".
-- Le check JS doit scanner `document.body.innerText` avec un regex large plutôt que des sélecteurs précis, car la structure DOM change selon les variantes et le contexte.
+- HSN n'utilise pas `.stock.unavailable` seul — selon les variantes le DOM expose plutôt un bouton "Prévenez-moi lorsque le produit sera disponible" ou désactive l'add-to-cart.
+- Le check (`_STOCK_CHECK_JS`) est **par variante** : il s'exécute après le click legacy ou le `select_option` qui sélectionne la variante. Sinon on lit l'état de la variante par défaut pour toutes les tailles.
+- Le check est **scopé à `.product-info-main`** (et fallbacks), pas à `document.body`. Sinon une variante OOS qu'on exclut (ex: `Pack (5x500g)`) contamine la détection des tailles 500g/2kg en stock — incident résolu 2026-05.
+- Pour la méthode SELECT (HSN ~2025+), il faut programmatiquement `page.select_option(...)` avant le check stock, sinon le DOM reste figé sur la variante par défaut. Coût ≈ CLICK_WAIT × N variantes (acceptable).
 - La colonne `En stock` dans Excel vaut `True` par défaut (conservateur : mieux manquer une rupture que de faux-positifs).
-- Le check se fait **une fois par page** (niveau produit, pas par variante), avant la boucle sur les tailles.
+- Les tailles `Pack` / `Monodose` sont déjà exclues via `SIZE_EXCLUDE_RE` avant la boucle — leur état stock n'a pas à être vérifié.
 
 ## Graphique de tendance multi-produits
 
