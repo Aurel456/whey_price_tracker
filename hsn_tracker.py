@@ -113,11 +113,14 @@ HEADERS    = [
     # Champs spécifiques omega-3 et créatine (vides pour les whey)
     "EPA (mg/dose)", "DHA (mg/dose)", "Coût/g EPA+DHA (€)",
     "Créatine (g/dose)", "Coût/kg créatine (€)",
+    # Disponibilité (False si rupture de stock détectée au scraping)
+    "En stock",
 ]
 COL_WIDTHS = [12, 45, 50, 12, 12, 10, 18, 15, 12, 60, 50,
               18, 18, 16, 18, 16, 16, 14, 16, 16, 14, 80, 60,
               18, 18,
-              14, 14, 14, 18, 14, 18]
+              14, 14, 14, 18, 14, 18,
+              10]
 
 
 # ── Excel helpers ─────────────────────────────────────────────────────────────
@@ -210,6 +213,7 @@ def append_rows(rows: list):
             r.get("cout_g_epa_dha"),
             r.get("creatine_g_dose"),
             r.get("cout_kg_creatine"),
+            r.get("en_stock", True),
         ]
         row_fill = ALT_FILL if i % 2 == 0 else None
         for col, val in enumerate(data, start=1):
@@ -437,6 +441,7 @@ WHEY_TYPE_LABELS = {
     "caseine":     "Caséine",
     "vegetal":     "Végétal",
     "mix":         "Mix protéines",
+    "enzyme":      "Enzymes digestives (DigeZyme®)",
 }
 
 
@@ -508,6 +513,9 @@ def _detect_whey_type(ingredients: str, name: str) -> list:
     # Mix si plusieurs sources de protéines distinctes (très spécifique)
     if "mix" in name_l and "protéines" in name_l:
         out.append("mix")
+    # Enzymes digestives : marque DigeZyme® ou mention explicite
+    if "digezyme" in combined or "enzymes digestives" in combined:
+        out.append("enzyme")
     return out
 
 
@@ -761,6 +769,16 @@ async def scrape_product(page, url: str) -> list:
             pass
         await dismiss_cookie_popup(page)
 
+        # Vérifie la disponibilité du produit (une fois par page, pas par variant)
+        en_stock = await page.evaluate("""() => {
+            // Indicateur Magento standard
+            if (document.querySelector('.stock.unavailable')) return false;
+            // Textes spécifiques HSN
+            const body = document.body.innerText;
+            if (/rupture de stock|en rupture|indisponible|pr.venez.moi lorsque le produit sera disponible/i.test(body)) return false;
+            return true;
+        }""")
+
         name = await page.evaluate(
             "document.querySelector('h1.page-title span, h1[itemprop=\"name\"]')"
             "?.innerText?.trim() || document.querySelector('h1')?.innerText?.trim() || ''"
@@ -819,7 +837,7 @@ async def scrape_product(page, url: str) -> list:
             )
             row = {
                 "name": name, "url": url, "size": "Unique",
-                "price": _clean(price_raw), **port_data,
+                "price": _clean(price_raw), "en_stock": en_stock, **port_data,
             }
             results.append(_enrich_row(row, nutri))
             return results
@@ -859,7 +877,7 @@ async def scrape_product(page, url: str) -> list:
 
             row = {
                 "name": name, "url": url, "size": sz["label"],
-                "price": price_str, **port_data,
+                "price": price_str, "en_stock": en_stock, **port_data,
             }
             results.append(_enrich_row(row, nutri))
             short = url.rsplit('/', 1)[-1][:28]
@@ -983,6 +1001,7 @@ def generate_dashboard(rows=None):
             "labels":      list(manual.get("labels", []) or []),
             "note":        str(manual.get("note", "") or ""),
             "hasIngredients": bool(ingr.strip()) if isinstance(ingr, str) else False,
+            "en_stock":    r.get("En stock"),
         })
 
     # Sérialise l'historique pour les courbes de tendance
@@ -1064,6 +1083,9 @@ def generate_dashboard(rows=None):
         ".deal-badge { display: inline-block; background: #FF6B35; color: #fff;"
         " font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px;"
         " margin-left: 6px; vertical-align: middle; letter-spacing: 0.3px; }\n"
+        ".oos-badge { display: inline-block; background: #FFF0EE; color: #B23B3B;"
+        " border: 0.5px solid #F5C7C7; font-size: 9px; font-weight: 700; padding: 1px 5px;"
+        " border-radius: 3px; margin-left: 6px; vertical-align: middle; }\n"
         ".trend-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;"
         " margin-bottom: 12px; }\n"
         ".trend-controls select { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px;"
@@ -1169,10 +1191,16 @@ def generate_dashboard(rows=None):
         "<div class='chart-wrap whey-only'>\n"
         "  <div class='section-title'>Évolution dans le temps (EUR/kg protéine)</div>\n"
         "  <div class='trend-controls'>\n"
-        "    <label style='font-size:12px;color:#555'>Produit&nbsp;:</label>\n"
-        "    <select id='trendSelect'></select>\n"
-        "    <span id='trendInfo' style='font-size:11px;color:#888'></span>\n"
+        "    <select id='trendAddSelect' style='flex:1;min-width:0;max-width:340px;'></select>\n"
+        "    <button id='trendAddBtn' onclick='addTrendItem()'"
+        " style='padding:5px 12px;border:1px solid #378ADD;background:#fff;color:#185FA5;"
+        "border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;'>+ Ajouter</button>\n"
+        "    <button onclick='clearTrendItems()'"
+        " style='padding:5px 12px;border:1px solid #ccc;background:#fff;color:#666;"
+        "border-radius:6px;font-size:12px;cursor:pointer;'>Tout effacer</button>\n"
         "  </div>\n"
+        "  <div id='trendSelected' style='display:flex;gap:6px;flex-wrap:wrap;"
+        "min-height:24px;margin-top:8px;margin-bottom:4px;'></div>\n"
         "  <div style='position:relative;height:280px;'><canvas id='chartTrend'></canvas></div>\n"
         "</div>\n"
         "<div class='chart-wrap'>\n"
@@ -1248,6 +1276,7 @@ def generate_dashboard(rows=None):
         "  creatine: {sort:'coutKgCrea', key:'coutKgCrea', label:'Coût au kilo de créatine (EUR/kg)'},\n"
         "};\n"
         "const COLORS = {'500g':'#378ADD','750g':'#1D9E75','2Kg':'#7F77DD','Unique':'#D85A30'};\n"
+        "const TREND_COLORS = ['#378ADD','#1D9E75','#E84040','#F5A623','#7F77DD','#00BCD4','#FF6B35','#8BC34A'];\n"
         "const CAT_ORDER = ['Whey','Aliments enrichis','Autres'];\n"
         "const CATEGORIES = CAT_ORDER.filter(c=>RAW.some(r=>r.categorie===c)).concat([...new Set(RAW.map(r=>r.categorie).filter(c=>c && !CAT_ORDER.includes(c)))]);\n"
         "const PRODUCTS = [...new Set(RAW.map(r=>r.produit))];\n"
@@ -1277,6 +1306,7 @@ def generate_dashboard(rows=None):
         "let searchQuery = '';\n"
         "let sortKey = 'pxkgProt', sortAsc = true;\n"
         "let chartPxkgProt, chartCout30, chartPxkg, chartTrend;\n"
+        "let selectedTrendIndices = [];\n"
         "let modalCurrent = null;\n"
         "function fmt(v,d=2,suf=' EUR'){return v!=null?Number(v).toFixed(d)+suf:'—';}\n"
         "function matchesGroup(values, selected, mode){\n"
@@ -1348,7 +1378,8 @@ def generate_dashboard(rows=None):
         "  const cats=['all',...CATEGORIES];\n"
         "  document.getElementById('categoryFilters').innerHTML=cats.map(c=>`<button class='filter-btn ${c===currentCategory?\"active\":\"\"}' onclick='filterCategory(\"${c}\")'>${c==='all'?'Toutes catégories':c}</button>`).join('');\n"
         "}\n"
-        "function filterCategory(c){currentCategory=c;buildCategoryFilters();updateCharts();updateTable();buildTrendOptions();buildTrendChart();}\n"
+        "function filterCategory(c){currentCategory=c;buildCategoryFilters();updateCharts();updateTable();"
+        "selectedTrendIndices=[];renderTrendChips();buildTrendSelect();buildTrendChart();}\n"
         "function compareValues(a,b,k){\n"
         "  const av=a[k], bv=b[k];\n"
         "  if(av==null && bv==null) return 0;\n"
@@ -1426,12 +1457,13 @@ def generate_dashboard(rows=None):
         "  document.getElementById('tableBody').innerHTML=f.map(r=>{\n"
         "    const dealBadge = r.isDeal ? `<span class='deal-badge' title='Sous la moyenne historique de plus de 5%'>🔥 DEAL</span>` : '';\n"
         "    const missing = (currentTab==='whey' && isMissingInfo(r)) ? `<span class='missing-pill' title='Pas (ou peu) d&apos;info détectée — clic ✏️ pour annoter'>❓ à classer</span>` : '';\n"
+        "    const oosBadge = r.en_stock === false ? `<span class='oos-badge' title='Rupture de stock détectée au dernier scraping'>⚠️ Rupture</span>` : '';\n"
         "    const eff = effectiveTags(r.produit);\n"
         "    const noteLine = eff.note ? `<div class='note-line'>📝 ${escapeHtml(eff.note)}</div>` : '';\n"
         "    const editBtn = `<button class='edit-btn' title='Éditer tags &amp; note' onclick='openEditModal(${escapeHtml(JSON.stringify(r.produit))})'>✏️</button>`;\n"
         "    const cells = cols.map(c=>{\n"
         "      if(c.k==='produit'){\n"
-        "        return `<td title='${escapeHtml(r.produit)}' style='white-space:normal;overflow:visible;'><a href='${r.url}' target='_blank'>${escapeHtml(r.produit)}</a>${editBtn}${dealBadge}${missing}<div style='margin-top:3px;white-space:normal;'>${renderChips(r)}</div>${noteLine}</td>`;\n"
+        "        return `<td title='${escapeHtml(r.produit)}' style='white-space:normal;overflow:visible;'><a href='${r.url}' target='_blank'>${escapeHtml(r.produit)}</a>${editBtn}${dealBadge}${missing}${oosBadge}<div style='margin-top:3px;white-space:normal;'>${renderChips(r)}</div>${noteLine}</td>`;\n"
         "      }\n"
         "      const align = c.num ? 'text-align:right' : '';\n"
         "      const isBest = c.best && bestVals[c.k]!=null && r[c.k]===bestVals[c.k];\n"
@@ -1472,30 +1504,86 @@ def generate_dashboard(rows=None):
         "    searchQuery=e.target.value.trim();updateTable();\n"
         "  });\n"
         "}\n"
-        "function buildTrendOptions(){\n"
-        "  const sel=document.getElementById('trendSelect');\n"
+        "function buildTrendSelect(){\n"
+        "  const sel=document.getElementById('trendAddSelect');\n"
         "  const filtered=HISTORY.map((h,i)=>({h,i})).filter(x=>currentCategory==='all'||x.h.categorie===currentCategory);\n"
         "  sel.innerHTML=filtered.map(({h,i})=>`<option value='${i}'>${h.produit} — ${h.taille} (${h.points.length} pts)</option>`).join('');\n"
         "  if(filtered.length===0){sel.innerHTML='<option>Pas assez de données (besoin de 2+ jours)</option>';}\n"
         "}\n"
+        "function addTrendItem(){\n"
+        "  const idx=parseInt(document.getElementById('trendAddSelect').value);\n"
+        "  if(isNaN(idx)||selectedTrendIndices.length>=8) return;\n"
+        "  if(!selectedTrendIndices.includes(idx)){\n"
+        "    selectedTrendIndices.push(idx);\n"
+        "    renderTrendChips();\n"
+        "    buildTrendChart();\n"
+        "  }\n"
+        "}\n"
+        "function removeTrendItem(idx){\n"
+        "  selectedTrendIndices=selectedTrendIndices.filter(i=>i!==idx);\n"
+        "  renderTrendChips();\n"
+        "  buildTrendChart();\n"
+        "}\n"
+        "function clearTrendItems(){\n"
+        "  selectedTrendIndices=[];\n"
+        "  renderTrendChips();\n"
+        "  buildTrendChart();\n"
+        "}\n"
+        "function renderTrendChips(){\n"
+        "  const container=document.getElementById('trendSelected');\n"
+        "  if(!selectedTrendIndices.length){\n"
+        "    container.innerHTML=`<span style='font-size:11px;color:#aaa;align-self:center;'>"
+        "Sélectionne un produit et clique « + Ajouter » pour tracer son évolution.</span>`;\n"
+        "    document.getElementById('trendAddBtn').disabled=false;\n"
+        "    return;\n"
+        "  }\n"
+        "  container.innerHTML=selectedTrendIndices.map((idx,i)=>{\n"
+        "    const h=HISTORY[idx]; if(!h) return '';\n"
+        "    const c=TREND_COLORS[i%TREND_COLORS.length];\n"
+        "    return `<span style='display:inline-flex;align-items:center;gap:4px;background:#fff;"
+        "border:1.5px solid ${c};color:#333;border-radius:12px;padding:2px 8px 2px 6px;"
+        "font-size:11px;'>`\n"
+        "      + `<span style='width:8px;height:8px;border-radius:50%;background:${c};"
+        "display:inline-block;flex-shrink:0;'></span>`\n"
+        "      + `${escapeHtml(h.produit.slice(0,28))} — ${escapeHtml(h.taille)}`\n"
+        "      + `<button onclick='removeTrendItem(${idx})' style='background:none;border:0;"
+        "cursor:pointer;color:#999;font-size:14px;padding:0 0 0 4px;line-height:1;'>×</button>`\n"
+        "      + `</span>`;\n"
+        "  }).join('');\n"
+        "  document.getElementById('trendAddBtn').disabled=selectedTrendIndices.length>=8;\n"
+        "}\n"
         "function buildTrendChart(){\n"
-        "  if(HISTORY.length===0){return;}\n"
-        "  const idx=parseInt(document.getElementById('trendSelect').value)||0;\n"
-        "  const h=HISTORY[idx];\n"
-        "  if(!h){return;}\n"
-        "  const labels=h.points.map(p=>p.date);\n"
-        "  const data=h.points.map(p=>p.pxkgProt);\n"
-        "  document.getElementById('trendInfo').textContent=`${h.produit} ${h.taille} — ${h.points.length} relevés`;\n"
-        "  if(chartTrend){chartTrend.destroy();}\n"
+        "  if(chartTrend){chartTrend.destroy(); chartTrend=null;}\n"
+        "  if(!selectedTrendIndices.length){\n"
+        "    chartTrend=new Chart(document.getElementById('chartTrend'),{\n"
+        "      type:'line',data:{labels:[],datasets:[]},\n"
+        "      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}\n"
+        "    });\n"
+        "    return;\n"
+        "  }\n"
+        "  const allDates=[...new Set(selectedTrendIndices.flatMap(idx=>(HISTORY[idx]||{points:[]}).points.map(p=>p.date)))].sort();\n"
+        "  const datasets=selectedTrendIndices.map((idx,i)=>{\n"
+        "    const h=HISTORY[idx]; if(!h) return null;\n"
+        "    const color=TREND_COLORS[i%TREND_COLORS.length];\n"
+        "    const dm={}; h.points.forEach(p=>{dm[p.date]=p.pxkgProt;});\n"
+        "    return{label:`${h.produit.slice(0,24)} — ${h.taille}`,\n"
+        "      data:allDates.map(d=>dm[d]??null),\n"
+        "      borderColor:color,backgroundColor:color+'22',\n"
+        "      tension:0.2,pointRadius:4,fill:false,spanGaps:true};\n"
+        "  }).filter(Boolean);\n"
         "  chartTrend=new Chart(document.getElementById('chartTrend'),{\n"
         "    type:'line',\n"
-        "    data:{labels,datasets:[{label:'EUR/kg protéine',data,borderColor:'#378ADD',backgroundColor:'rgba(55,138,221,0.1)',tension:0.2,pointRadius:4,fill:true}]},\n"
-        "    options:COPTS()\n"
+        "    data:{labels:allDates,datasets},\n"
+        "    options:{responsive:true,maintainAspectRatio:false,\n"
+        "      plugins:{legend:{display:datasets.length>1,position:'top',labels:{font:{size:11},"
+        "boxWidth:12}},\n"
+        "        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?Number(ctx.parsed.y).toFixed(2)+' EUR':'N/A'}`}}},\n"
+        "      scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:35}},\n"
+        "        y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},"
+        "callback:v=>Number(v).toFixed(2)+' EUR'},beginAtZero:false}}}\n"
         "  });\n"
         "}\n"
-        "function setupTrend(){\n"
-        "  document.getElementById('trendSelect').addEventListener('change',buildTrendChart);\n"
-        "}\n"
+        "function setupTrend(){}\n"
         "function bestOf(rows, key){ const w=rows.filter(r=>r[key]!=null); return w.length?w.reduce((a,b)=>a[key]<b[key]?a:b):null; }\n"
         "function cardHtml(label,value,sub,best){\n"
         "  const cls = best?'card-value best':'card-value';\n"
@@ -1554,7 +1642,7 @@ def generate_dashboard(rows=None):
         "  buildMetrics();\n"
         "  updateCharts();\n"
         "  updateTable();\n"
-        "  buildTrendOptions(); buildTrendChart();\n"
+        "  selectedTrendIndices=[]; renderTrendChips(); buildTrendSelect(); buildTrendChart();\n"
         "}\n"
         "function applyTabUI(){\n"
         "  // .whey-only éléments visibles uniquement sur le tab whey\n"
@@ -1583,7 +1671,7 @@ def generate_dashboard(rows=None):
         "    <button class='filter-btn sm ${sz===currentSize?\"active\":\"\"}'"
         " onclick='filterSize(\"${sz}\")'>${sz==='all'?'Toutes':sz}</button>`).join('');\n"
         "}\n"
-        "function filterSize(sz){currentSize=sz;buildFilters();updateCharts();updateTable();buildTrendOptions();buildTrendChart();}\n"
+        "function filterSize(sz){currentSize=sz;buildFilters();updateCharts();updateTable();buildTrendSelect();}\n"
         # ── Sweetener / whey-type / labels filters ─────────────────────────
         "function toggleSet(set,val){ if(set.has(val)) set.delete(val); else set.add(val); }\n"
         "function logicChip(group, mode){\n"
@@ -1714,7 +1802,7 @@ def generate_dashboard(rows=None):
         "buildMetrics();buildCategoryFilters();buildFilters();\n"
         "buildSweetFilters();buildWheyFilters();buildTypeTagFilters();buildLabelFilters();\n"
         "initCharts();\n"
-        "buildTrendOptions();buildTrendChart();setupTrend();\n"
+        "buildTrendSelect();renderTrendChips();buildTrendChart();\n"
         "renderTableHead();setupSearch();updateEditStatus();updateTable();\n"
         "</script>\n"
         "</body>\n"
