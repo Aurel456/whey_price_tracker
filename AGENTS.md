@@ -67,6 +67,21 @@ Notes consolidées des erreurs et apprentissages rencontrés lors du dev. À lir
 3. Si tu touches au scraping → test ciblé sur 1-2 URLs avant de lancer le full scrape (cf. les helpers ponctuels supprimés `_test_new_urls.py`).
 4. **Toujours regen le dashboard** après modif data ou JS, sinon le HTML qui est versionné reflète l'ancien état.
 
+## Détection rupture de stock
+
+- HSN n'utilise pas `.stock.unavailable` seul — le texte visible est "rupture de stock" ou "Prévenez-moi lorsque le produit sera disponible" ou "Ce produit est en rupture de stock, mais d'autres clients l'ont acheté".
+- Le check JS doit scanner `document.body.innerText` avec un regex large plutôt que des sélecteurs précis, car la structure DOM change selon les variantes et le contexte.
+- La colonne `En stock` dans Excel vaut `True` par défaut (conservateur : mieux manquer une rupture que de faux-positifs).
+- Le check se fait **une fois par page** (niveau produit, pas par variante), avant la boucle sur les tailles.
+
+## Graphique de tendance multi-produits
+
+- `selectedTrendIndices` = array d'indices dans `HISTORY`. Limité à 8 séries (lisibilité).
+- `renderTrendChips()` doit être appelé à chaque modification de `selectedTrendIndices` avant `buildTrendChart()`.
+- `buildTrendSelect()` remplace `buildTrendOptions()` — peuple uniquement le `<select>` d'ajout.
+- Lors d'un changement de catégorie ou d'onglet, vider `selectedTrendIndices` + appeler `renderTrendChips()` pour réinitialiser l'UI.
+- Les dates sont agrégées sur l'union de tous les points (`flatMap` + `Set` + `sort`). Les trous sont comblés par `spanGaps:true`.
+
 ## Ne pas faire
 
 - Ne pas filtrer silencieusement des rows dans `generate_dashboard` sans un commentaire expliquant pourquoi (cf. l'incident px_kg/oméga).
