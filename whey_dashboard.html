@@ -3,7 +3,7 @@
 <head>
 <meta charset='UTF-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-<title>HSN Whey Tracker — 04/05/2026</title>
+<title>HSN Whey Tracker — 05/05/2026</title>
 <script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js'></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -80,7 +80,7 @@ th.sortable.sort-asc .sort-arrow, th.sortable.sort-desc .sort-arrow { opacity: 1
 </head>
 <body>
 <h1>HSN — Suivi des prix nutrition sportive</h1>
-<p class='sub'>Derniere mise a jour : 04/05/2026 &nbsp;|&nbsp; 38 produits &nbsp;|&nbsp; 2 jour(s) de donnees</p>
+<p class='sub'>Derniere mise a jour : 05/05/2026 &nbsp;|&nbsp; 38 produits &nbsp;|&nbsp; 2 jour(s) de donnees</p>
 <div class='type-tabs' id='typeTabs'></div>
 <div class='cards' id='metricCards'></div>
 <div class='filter-row' id='catRow'><span class='flbl'>Catégorie</span><span id='categoryFilters' style='display:flex;gap:8px;flex-wrap:wrap;'></span></div>
@@ -469,7 +469,7 @@ function buildMetrics(){
     if(bc) cards.push(cardHtml('Meilleur EUR/kg créatine', bc.coutKgCrea.toFixed(2)+' EUR', `${bc.produit.slice(0,28)} — ${bc.taille}`, true));
     if(bx) cards.push(cardHtml('Meilleur EUR/kg', bx.pxkg.toFixed(2)+' EUR', `${bx.produit.slice(0,28)} — ${bx.taille}`));
   }
-  cards.push(`<div class='card'><div class='card-label'>Mise à jour</div><div class='card-value' style='font-size:16px'>04/05/2026</div></div>`);
+  cards.push(`<div class='card'><div class='card-label'>Mise à jour</div><div class='card-value' style='font-size:16px'>05/05/2026</div></div>`);
   document.getElementById('metricCards').innerHTML=cards.join('');
 }
 function tabCount(t){ return RAW.filter(r=>(r.type||'whey')===t).length; }
