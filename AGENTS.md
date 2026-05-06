@@ -69,10 +69,14 @@ Notes consolidées des erreurs et apprentissages rencontrés lors du dev. À lir
 
 ## Détection rupture de stock
 
-- HSN n'utilise pas `.stock.unavailable` seul — selon les variantes le DOM expose plutôt un bouton "Prévenez-moi lorsque le produit sera disponible" ou désactive l'add-to-cart.
+- **HSN n'utilise PAS les sélecteurs Magento standards** : pas de `#product-addtocart-button`, pas de `button.tocart`, et `.stock.unavailable` seul n'est pas fiable. Le thème HSN est un Tailwind custom — détection à faire via leurs propres conteneurs.
+- **Signaux fiables observés (`_STOCK_CHECK_JS`, 2026-05)** :
+  1. **`#addtocart-wrapper`** : sur la variante OOS, le bouton "Ajouter maintenant" est remplacé par `Rupture de stock, Préviens-moi!` + `Prévenez-moi lorsque le produit sera disponible`. Signal le plus net.
+  2. **`.product-info-main .stock-info-container`** : `En stock. Expédition immédiate.` (in-stock) vs `Temporairement en rupture de stock` (OOS).
+- **Toujours scoper à `.product-info-main`** (ou `#addtocart-wrapper` qui est unique). La page contient des produits cross-sell ("Vous aimerez aussi") qui ont **chacun** un `.stock-info-container` et des boutons "Ajouter maintenant" — un check global produit des faux résultats.
 - Le check (`_STOCK_CHECK_JS`) est **par variante** : il s'exécute après le click legacy ou le `select_option` qui sélectionne la variante. Sinon on lit l'état de la variante par défaut pour toutes les tailles.
-- Le check est **scopé à `.product-info-main`** (et fallbacks), pas à `document.body`. Sinon une variante OOS qu'on exclut (ex: `Pack (5x500g)`) contamine la détection des tailles 500g/2kg en stock — incident résolu 2026-05.
 - Pour la méthode SELECT (HSN ~2025+), il faut programmatiquement `page.select_option(...)` avant le check stock, sinon le DOM reste figé sur la variante par défaut. Coût ≈ CLICK_WAIT × N variantes (acceptable).
+- Le `<select id=selectProductSimple>` capture aussi des options de cross-sell (sur evoexcel : 152 options vs ~6 pour le produit). La dédup par taille dans `scrape_product` masque le problème en pratique, mais `select_option` peut cibler le mauvais select sur ce genre de page — à surveiller.
 - La colonne `En stock` dans Excel vaut `True` par défaut (conservateur : mieux manquer une rupture que de faux-positifs).
 - Les tailles `Pack` / `Monodose` sont déjà exclues via `SIZE_EXCLUDE_RE` avant la boucle — leur état stock n'a pas à être vérifié.
 

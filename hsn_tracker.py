@@ -760,30 +760,45 @@ def _enrich_row(row: dict, nutri: dict) -> dict:
 
 
 _STOCK_CHECK_JS = r"""() => {
-    // Check restreint à la zone produit principale (pas tout le body) pour
-    // éviter qu'une variante OOS (ex: Pack) contamine la détection des
-    // autres tailles. Sur Magento/HSN, l'état stock de la variante
-    // SÉLECTIONNÉE se reflète dans .product-info-main / l'add-to-cart.
-    const main = document.querySelector('.product-info-main')
-              || document.querySelector('.product-info-price')
-              || document.querySelector('[data-product-id]')
-              || document.body;
-    if (main.querySelector('.stock.unavailable')) return false;
-    // Bouton "Prévenez-moi quand dispo" visible → OOS
-    const alertBtn = main.querySelector(
-        'button[id*="alert"], a[href*="alert"], .alert-stock, [data-action*="alert"]'
-    );
-    if (alertBtn && alertBtn.offsetParent !== null) return false;
-    // Bouton ajouter au panier : visible et non-disabled → en stock
-    const cart = main.querySelector(
-        '#product-addtocart-button, button.tocart, button.action.tocart'
-    );
-    if (cart) {
-        if (cart.disabled) return false;
-        const style = window.getComputedStyle(cart);
-        if (style.display === 'none' || style.visibility === 'hidden') return false;
-        return true;
+    // HSN n'utilise pas les sélecteurs Magento standards (.stock.unavailable,
+    // #product-addtocart-button) — ils ont leur propre design Tailwind. Les
+    // signaux fiables observés (2026-05) sont :
+    //
+    //   1. #addtocart-wrapper : sur la variante OOS, le bouton "Ajouter
+    //      maintenant" est remplacé par un bouton "Rupture de stock,
+    //      Préviens-moi!" + un message "Prévenez-moi lorsque le produit
+    //      sera disponible". Très fiable, scoping naturel au produit principal.
+    //
+    //   2. .product-info-main .stock-info-container : "En stock. Expédition
+    //      immédiate." (in-stock) vs "Temporairement en rupture de stock" (OOS).
+    //      Attention : les cross-sells ont aussi des .stock-info-container,
+    //      d'où le scope à .product-info-main.
+    //
+    // Le check tourne après chaque sélection de variante (legacy click ou
+    // select_option), donc l'état reflète la variante COURANTE, pas une autre.
+
+    // Signal #1 — le wrapper addtocart
+    const cartWrap = document.querySelector('#addtocart-wrapper');
+    if (cartWrap) {
+        const txt = cartWrap.innerText || '';
+        if (/rupture|pr.viens.moi|pr.venez.moi.lorsque/i.test(txt)) return false;
     }
+
+    // Signal #2 — .stock-info-container scopé à .product-info-main
+    const main = document.querySelector('.product-info-main');
+    if (main) {
+        const stockInfo = main.querySelector('.stock-info-container');
+        if (stockInfo) {
+            const txt = stockInfo.innerText || '';
+            if (/rupture|temporairement|indisponible|hors stock/i.test(txt)) return false;
+        }
+    }
+
+    // Fallback : Magento standard (au cas où HSN reverse ou pour anciennes versions)
+    if (document.querySelector('.product-info-main .stock.unavailable, [data-product-info] .stock.unavailable')) {
+        return false;
+    }
+
     return true;
 }"""
 
