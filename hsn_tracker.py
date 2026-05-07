@@ -974,6 +974,7 @@ def generate_dashboard(rows=None):
         rdate = str(r.get("Date", ""))
         history_by_key[key].append({
             "date": rdate,
+            "prix": r.get("Prix (€)"),
             "pxkg": r.get("Prix/kg (€)"),
             "pxkgProt": r.get("Prix/kg protéine (€)"),
             "cout3leu": r.get("Cout/3g leucine (€)") or r.get("Coût/3g leucine (€)"),
@@ -1019,6 +1020,16 @@ def generate_dashboard(rows=None):
         else:
             sweeteners, whey_types, type_tags = [], [], []
         manual = manual_tags.get(produit, {}) or {}
+        # Pour les oméga-3 : quantité totale d'EPA+DHA dans le pack (en grammes).
+        # = capsules × (EPA+DHA mg/cap) / 1000. Sert à remplacer "EUR/kg" qui n'a
+        # pas vraiment de sens sur des softgels, par une métrique parlante.
+        g_epa_dha_pack = None
+        if ptype == "omega3":
+            caps = _parse_size_caps(taille)
+            epa_v = r.get("EPA (mg/dose)") or 0
+            dha_v = r.get("DHA (mg/dose)") or 0
+            if caps and (epa_v or dha_v):
+                g_epa_dha_pack = round(caps * (epa_v + dha_v) / 1000.0, 1)
         chart_rows.append({
             "date":     str(r.get("Date", "")),
             "produit":  produit,
@@ -1037,6 +1048,7 @@ def generate_dashboard(rows=None):
             "epa":         r.get("EPA (mg/dose)"),
             "dha":         r.get("DHA (mg/dose)"),
             "coutGOmega":  r.get("Coût/g EPA+DHA (€)") or r.get("Cout/g EPA+DHA (€)"),
+            "gEpaDhaPack": g_epa_dha_pack,
             "creaDose":    r.get("Créatine (g/dose)"),
             "coutKgCrea":  r.get("Coût/kg créatine (€)") or r.get("Cout/kg créatine (€)"),
             "avgPxkgProt": meta.get("avg"),
@@ -1054,13 +1066,15 @@ def generate_dashboard(rows=None):
         })
 
     # Sérialise l'historique pour les courbes de tendance
-    # Catégorie reprise depuis le snapshot le plus récent (chart_rows / latest)
+    # Catégorie + type repris depuis le snapshot le plus récent (chart_rows / latest)
     cat_by_key = {(c["produit"], c["taille"]): c["categorie"] for c in chart_rows}
+    type_by_key = {(c["produit"], c["taille"]): c["type"] for c in chart_rows}
     history_json_data = [
         {
             "produit":   k[0],
             "taille":    k[1],
             "categorie": cat_by_key.get(k, ""),
+            "type":      type_by_key.get(k, "whey"),
             "points":    v,
         }
         for k, v in history_by_key.items()
@@ -1237,13 +1251,16 @@ def generate_dashboard(rows=None):
         "  <div class='legend' id='legendPxkg'></div>\n"
         "  <div style='position:relative;height:300px;'><canvas id='chartPxkg'></canvas></div>\n"
         "</div>\n"
-        "<div class='chart-wrap whey-only'>\n"
-        "  <div class='section-title'>Évolution dans le temps (EUR/kg protéine)</div>\n"
+        "<div class='chart-wrap'>\n"
+        "  <div class='section-title' id='trendChartTitle'>Évolution dans le temps (EUR/kg protéine)</div>\n"
         "  <div class='trend-controls'>\n"
         "    <select id='trendAddSelect' style='flex:1;min-width:0;max-width:340px;'></select>\n"
         "    <button id='trendAddBtn' onclick='addTrendItem()'"
         " style='padding:5px 12px;border:1px solid #378ADD;background:#fff;color:#185FA5;"
         "border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;'>+ Ajouter</button>\n"
+        "    <button onclick='addAllDeals()' title='Sélectionne automatiquement toutes les courbes flaguées DEAL (max 8)'"
+        " style='padding:5px 12px;border:1px solid #FF6B35;background:#fff;color:#FF6B35;"
+        "border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;font-weight:600;'>🔥 Tous les DEALs</button>\n"
         "    <button onclick='clearTrendItems()'"
         " style='padding:5px 12px;border:1px solid #ccc;background:#fff;color:#666;"
         "border-radius:6px;font-size:12px;cursor:pointer;'>Tout effacer</button>\n"
@@ -1283,7 +1300,8 @@ def generate_dashboard(rows=None):
         f"const WHEY_TYPE_LABELS = {json.dumps(WHEY_TYPE_LABELS, ensure_ascii=False)};\n"
         f"const OMEGA3_TYPE_LABELS = {json.dumps(OMEGA3_TYPE_LABELS, ensure_ascii=False)};\n"
         f"const CREATINE_TYPE_LABELS = {json.dumps(CREATINE_TYPE_LABELS, ensure_ascii=False)};\n"
-        "const TYPE_TAB_LABEL = { whey:'Whey & protéines', omega3:'Oméga-3', creatine:'Créatine' };\n"
+        "const TYPE_TAB_LABEL = { whey:'Whey & protéines', omega3:'Oméga-3', creatine:'Créatine', global:'Global' };\n"
+        "const TYPE_BADGE_LABEL = { whey:'Whey', omega3:'Oméga-3', creatine:'Créatine' };\n"
         "// Colonnes du tableau par type de produit\n"
         "const TAB_COLS = {\n"
         "  whey: [\n"
@@ -1305,7 +1323,7 @@ def generate_dashboard(rows=None):
         "    {k:'epa',l:'EPA mg/cap',w:'10%',num:true,fmt:'int'},\n"
         "    {k:'dha',l:'DHA mg/cap',w:'10%',num:true,fmt:'int'},\n"
         "    {k:'coutGOmega',l:'EUR/g EPA+DHA',w:'14%',num:true,d:3,best:true},\n"
-        "    {k:'pxkg',l:'EUR/kg',w:'10%',num:true,d:2},\n"
+        "    {k:'gEpaDhaPack',l:'g EPA+DHA / pack',w:'12%',num:true,d:1,suf:' g',title:'Quantité totale d\\'EPA+DHA dans le pack (capsules × (EPA+DHA mg/cap) / 1000)'},\n"
         "    {k:'date',l:'Date',w:'8%',num:true,fmt:'date'},\n"
         "  ],\n"
         "  creatine: [\n"
@@ -1317,17 +1335,42 @@ def generate_dashboard(rows=None):
         "    {k:'pxkg',l:'EUR/kg',w:'10%',num:true,d:2},\n"
         "    {k:'date',l:'Date',w:'10%',num:true,fmt:'date'},\n"
         "  ],\n"
+        "  global: [\n"
+        "    {k:'produit',l:'Produit',w:'28%',wide:true},\n"
+        "    {k:'type',l:'Type',w:'9%',fmt:'typeBadge'},\n"
+        "    {k:'taille',l:'Taille',w:'9%'},\n"
+        "    {k:'prix',l:'Prix',w:'8%',num:true,d:2},\n"
+        "    {k:'pxkg',l:'EUR/kg',w:'9%',num:true,d:2},\n"
+        "    {k:'pxkgProt',l:'EUR/kg prot',w:'10%',num:true,d:2,title:'Whey uniquement'},\n"
+        "    {k:'coutGOmega',l:'EUR/g E+D',w:'10%',num:true,d:3,title:'Oméga-3 uniquement'},\n"
+        "    {k:'coutKgCrea',l:'EUR/kg créa',w:'9%',num:true,d:2,title:'Créatine uniquement'},\n"
+        "    {k:'date',l:'Date',w:'8%',num:true,fmt:'date'},\n"
+        "  ],\n"
         "};\n"
         "// Métrique principale par tab : sort key par défaut + chart key + label\n"
         "const TAB_PRIMARY = {\n"
         "  whey:     {sort:'pxkgProt', key:'pxkg',       label:'Prix au kilo de produit (EUR/kg)'},\n"
         "  omega3:   {sort:'coutGOmega', key:'coutGOmega', label:'Coût pour 1g d\\'EPA+DHA (EUR)'},\n"
         "  creatine: {sort:'coutKgCrea', key:'coutKgCrea', label:'Coût au kilo de créatine (EUR/kg)'},\n"
+        "  global:   {sort:'produit',   key:'prix',        label:'Prix nominal (EUR)'},\n"
+        "};\n"
+        "// Métrique utilisée pour le graphique de tendance par tab.\n"
+        "//   trendKey  : champ lu dans HISTORY[].points[]\n"
+        "//   trendDecs : nombre de décimales\n"
+        "//   trendUnit : suffixe d'axe / tooltip\n"
+        "//   trendTitle: titre affiché au-dessus du chart\n"
+        "const TREND_META = {\n"
+        "  whey:     {key:'pxkgProt',   decs:2, unit:' EUR', title:'Évolution dans le temps (EUR/kg protéine)'},\n"
+        "  omega3:   {key:'coutGOmega', decs:3, unit:' EUR', title:'Évolution dans le temps (EUR/g EPA+DHA)'},\n"
+        "  creatine: {key:'coutKgCrea', decs:2, unit:' EUR', title:'Évolution dans le temps (EUR/kg créatine)'},\n"
+        "  global:   {key:'prix',       decs:2, unit:' EUR', title:'Évolution dans le temps (prix nominal)'},\n"
         "};\n"
         "const COLORS = {'500g':'#378ADD','750g':'#1D9E75','2Kg':'#7F77DD','Unique':'#D85A30'};\n"
         "const TREND_COLORS = ['#378ADD','#1D9E75','#E84040','#F5A623','#7F77DD','#00BCD4','#FF6B35','#8BC34A'];\n"
         "const CAT_ORDER = ['Whey','Aliments enrichis','Autres'];\n"
-        "const CATEGORIES = CAT_ORDER.filter(c=>RAW.some(r=>r.categorie===c)).concat([...new Set(RAW.map(r=>r.categorie).filter(c=>c && !CAT_ORDER.includes(c)))]);\n"
+        "// Catégories whey uniquement (Oméga-3 / Créatine ne doivent PAS apparaître\n"
+        "// dans le filtre Catégorie qui n'est visible que sur le tab whey).\n"
+        "const CATEGORIES = CAT_ORDER.filter(c=>RAW.some(r=>(r.type||'whey')==='whey' && r.categorie===c));\n"
         "const PRODUCTS = [...new Set(RAW.map(r=>r.produit))];\n"
         "const SIZES = [...new Set(RAW.map(r=>r.taille))];\n"
         "const SWEETENERS = Object.keys(SWEETENER_LABELS).filter(k=>RAW.some(r=>(r.sweeteners||[]).includes(k)));\n"
@@ -1365,13 +1408,13 @@ def generate_dashboard(rows=None):
         "  return false;\n"
         "}\n"
         "function getFiltered(){\n"
-        "  let f = RAW.filter(r => (r.type||'whey') === currentTab);\n"
+        "  let f = currentTab==='global' ? RAW.slice() : RAW.filter(r => (r.type||'whey') === currentTab);\n"
         "  if(currentTab==='whey' && currentCategory!=='all'){f=f.filter(r=>r.categorie===currentCategory);}\n"
         "  if(currentSize!=='all'){f=f.filter(r=>r.taille===currentSize);}\n"
         "  if(currentTab==='whey'){\n"
         "    f = f.filter(r => matchesGroup(r.sweeteners||[], selectedSweeteners, swLogic));\n"
         "    f = f.filter(r => matchesGroup(r.wheyTypes||[], selectedWheyTypes, wtLogic));\n"
-        "  } else {\n"
+        "  } else if(currentTab==='omega3' || currentTab==='creatine'){\n"
         "    f = f.filter(r => matchesGroup(r.typeTags||[], selectedTypeTags, ttLogic));\n"
         "  }\n"
         "  f = f.filter(r => matchesGroup(effectiveTags(r.produit).labels||[], selectedLabels, lblLogic));\n"
@@ -1469,7 +1512,20 @@ def generate_dashboard(rows=None):
         "  if(col.fmt==='pct') return Number(v).toFixed(0)+'%';\n"
         "  if(col.fmt==='int') return Number(v).toFixed(0);\n"
         "  if(col.fmt==='date') return v;\n"
-        "  if(col.num) return Number(v).toFixed(col.d!=null?col.d:2)+' EUR';\n"
+        "  if(col.fmt==='typeBadge'){\n"
+        "    const lbl = TYPE_BADGE_LABEL[v] || v;\n"
+        "    const styles = {\n"
+        "      whey:    'background:#EEF3FB;color:#2A5C9C;border:0.5px solid #C8D8EE',\n"
+        "      omega3:  'background:#FFF6E0;color:#92580A;border:0.5px solid #F0DAA0',\n"
+        "      creatine:'background:#EFEDFA;color:#4A40A8;border:0.5px solid #D4CEEA',\n"
+        "    };\n"
+        "    const st = styles[v] || 'background:#eee;color:#666;border:0.5px solid #ccc';\n"
+        "    return `<span class='tag-chip' style='${st};font-size:10px;'>${escapeHtml(lbl)}</span>`;\n"
+        "  }\n"
+        "  if(col.num){\n"
+        "    const suf = col.suf!=null ? col.suf : ' EUR';\n"
+        "    return Number(v).toFixed(col.d!=null?col.d:2)+suf;\n"
+        "  }\n"
         "  return String(v);\n"
         "}\n"
         "function renderTableHead(){\n"
@@ -1555,9 +1611,32 @@ def generate_dashboard(rows=None):
         "}\n"
         "function buildTrendSelect(){\n"
         "  const sel=document.getElementById('trendAddSelect');\n"
-        "  const filtered=HISTORY.map((h,i)=>({h,i})).filter(x=>currentCategory==='all'||x.h.categorie===currentCategory);\n"
+        "  // Filtre les courbes : sur global → toutes, sur whey/oméga/créatine → uniquement\n"
+        "  // les produits du tab. La catégorie ne s'applique que sur le tab whey.\n"
+        "  const filtered=HISTORY.map((h,i)=>({h,i})).filter(x=>{\n"
+        "    if(currentTab!=='global' && x.h.type && x.h.type!==currentTab) return false;\n"
+        "    if(currentTab==='whey' && currentCategory!=='all' && x.h.categorie!==currentCategory) return false;\n"
+        "    return true;\n"
+        "  });\n"
         "  sel.innerHTML=filtered.map(({h,i})=>`<option value='${i}'>${h.produit} — ${h.taille} (${h.points.length} pts)</option>`).join('');\n"
         "  if(filtered.length===0){sel.innerHTML='<option>Pas assez de données (besoin de 2+ jours)</option>';}\n"
+        "}\n"
+        "function addAllDeals(){\n"
+        "  // Sélectionne les courbes des produits flagués DEAL pour le tab courant\n"
+        "  // (limitées à 8 — la limite globale du chart de tendance).\n"
+        "  const dealKeys = new Set();\n"
+        "  RAW.forEach(r=>{\n"
+        "    if(!r.isDeal) return;\n"
+        "    if(currentTab!=='global' && (r.type||'whey')!==currentTab) return;\n"
+        "    if(currentTab==='whey' && currentCategory!=='all' && r.categorie!==currentCategory) return;\n"
+        "    dealKeys.add(r.produit + '|' + r.taille);\n"
+        "  });\n"
+        "  const indices = [];\n"
+        "  HISTORY.forEach((h,i)=>{\n"
+        "    if(dealKeys.has(h.produit + '|' + h.taille)) indices.push(i);\n"
+        "  });\n"
+        "  selectedTrendIndices = indices.slice(0, 8);\n"
+        "  renderTrendChips(); buildTrendChart();\n"
         "}\n"
         "function addTrendItem(){\n"
         "  const idx=parseInt(document.getElementById('trendAddSelect').value);\n"
@@ -1610,11 +1689,13 @@ def generate_dashboard(rows=None):
         "    });\n"
         "    return;\n"
         "  }\n"
+        "  const meta = TREND_META[currentTab] || TREND_META.whey;\n"
+        "  const trendKey = meta.key, decs = meta.decs, unit = meta.unit;\n"
         "  const allDates=[...new Set(selectedTrendIndices.flatMap(idx=>(HISTORY[idx]||{points:[]}).points.map(p=>p.date)))].sort();\n"
         "  const datasets=selectedTrendIndices.map((idx,i)=>{\n"
         "    const h=HISTORY[idx]; if(!h) return null;\n"
         "    const color=TREND_COLORS[i%TREND_COLORS.length];\n"
-        "    const dm={}; h.points.forEach(p=>{dm[p.date]=p.pxkgProt;});\n"
+        "    const dm={}; h.points.forEach(p=>{dm[p.date]=p[trendKey];});\n"
         "    return{label:`${h.produit.slice(0,24)} — ${h.taille}`,\n"
         "      data:allDates.map(d=>dm[d]??null),\n"
         "      borderColor:color,backgroundColor:color+'22',\n"
@@ -1626,10 +1707,10 @@ def generate_dashboard(rows=None):
         "    options:{responsive:true,maintainAspectRatio:false,\n"
         "      plugins:{legend:{display:datasets.length>1,position:'top',labels:{font:{size:11},"
         "boxWidth:12}},\n"
-        "        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?Number(ctx.parsed.y).toFixed(2)+' EUR':'N/A'}`}}},\n"
+        "        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?Number(ctx.parsed.y).toFixed(decs)+unit:'N/A'}`}}},\n"
         "      scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:35}},\n"
         "        y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},"
-        "callback:v=>Number(v).toFixed(2)+' EUR'},beginAtZero:false}}}\n"
+        "callback:v=>Number(v).toFixed(decs)+unit},beginAtZero:false}}}\n"
         "  });\n"
         "}\n"
         "function setupTrend(){}\n"
@@ -1640,11 +1721,22 @@ def generate_dashboard(rows=None):
         "  return `<div class='card'><div class='card-label'>${escapeHtml(label)}</div><div class='${cls}'>${value}</div>${subHtml}</div>`;\n"
         "}\n"
         "function buildMetrics(){\n"
-        "  const tabRows = RAW.filter(r=>(r.type||'whey')===currentTab);\n"
+        "  const tabRows = currentTab==='global' ? RAW.slice() : RAW.filter(r=>(r.type||'whey')===currentTab);\n"
         "  const prods=new Set(tabRows.map(r=>r.produit)).size;\n"
         "  const cards=[];\n"
         "  cards.push(`<div class='card'><div class='card-label'>${escapeHtml(TYPE_TAB_LABEL[currentTab]||'Produits')}</div><div class='card-value'>${prods}</div></div>`);\n"
-        "  if(currentTab==='whey'){\n"
+        "  if(currentTab==='global'){\n"
+        "    const dealCount = tabRows.filter(r=>r.isDeal).length;\n"
+        "    const oosCount  = tabRows.filter(r=>r.en_stock===false).length;\n"
+        "    cards.push(`<div class='card'><div class='card-label'>🔥 DEALs en cours</div><div class='card-value' style='color:#FF6B35'>${dealCount}</div><div class='card-sub'>sous moyenne historique -5%</div></div>`);\n"
+        "    if(oosCount>0) cards.push(`<div class='card'><div class='card-label'>⚠️ Ruptures</div><div class='card-value' style='color:#B23B3B'>${oosCount}</div></div>`);\n"
+        "    const bw=bestOf(tabRows.filter(r=>(r.type||'whey')==='whey'),'pxkgProt');\n"
+        "    const bo=bestOf(tabRows.filter(r=>(r.type||'whey')==='omega3'),'coutGOmega');\n"
+        "    const bcr=bestOf(tabRows.filter(r=>(r.type||'whey')==='creatine'),'coutKgCrea');\n"
+        "    if(bw) cards.push(cardHtml('Top whey EUR/kg prot', bw.pxkgProt.toFixed(2)+' EUR', bw.produit.slice(0,28), true));\n"
+        "    if(bo) cards.push(cardHtml('Top oméga EUR/g E+D', bo.coutGOmega.toFixed(3)+' EUR', bo.produit.slice(0,28), true));\n"
+        "    if(bcr) cards.push(cardHtml('Top créatine EUR/kg', bcr.coutKgCrea.toFixed(2)+' EUR', bcr.produit.slice(0,28), true));\n"
+        "  } else if(currentTab==='whey'){\n"
         "    const bp=bestOf(tabRows,'pxkgProt'), bc=bestOf(tabRows,'cout30'), bl=bestOf(tabRows,'cout3leu'), bx=bestOf(tabRows,'pxkg');\n"
         "    if(bp) cards.push(cardHtml('Meilleur EUR/kg protéine', bp.pxkgProt.toFixed(2)+' EUR', `${bp.produit.slice(0,28)} — ${bp.taille}`, true));\n"
         "    if(bc) cards.push(cardHtml('Meilleur 30g protéine', bc.cout30.toFixed(3)+' EUR', `${bc.produit.slice(0,28)} — ${bc.taille}`, true));\n"
@@ -1664,10 +1756,10 @@ def generate_dashboard(rows=None):
         "  document.getElementById('metricCards').innerHTML=cards.join('');\n"
         "}\n"
         # ── Type tabs (Whey / Oméga-3 / Créatine) ───────────────────────────
-        "function tabCount(t){ return RAW.filter(r=>(r.type||'whey')===t).length; }\n"
+        "function tabCount(t){ return t==='global' ? RAW.length : RAW.filter(r=>(r.type||'whey')===t).length; }\n"
         "function buildTypeTabs(){\n"
-        "  // Toujours afficher les 3 onglets ; un onglet vide est grisé + compteur (0)\n"
-        "  const tabs = ['whey','omega3','creatine'];\n"
+        "  // Toujours afficher les 4 onglets ; un onglet vide est grisé + compteur (0)\n"
+        "  const tabs = ['whey','omega3','creatine','global'];\n"
         "  document.getElementById('typeTabs').innerHTML = tabs.map(t=>{\n"
         "    const n = tabCount(t);\n"
         "    const dim = n===0 ? ' style=\"opacity:0.45\"' : '';\n"
@@ -1680,7 +1772,7 @@ def generate_dashboard(rows=None):
         "  currentTab=t;\n"
         "  // Reset des filtres spécifiques à un tab\n"
         "  selectedSweeteners.clear(); selectedWheyTypes.clear(); selectedTypeTags.clear();\n"
-        "  currentSize='all'; currentCategory = (currentTab==='whey') ? 'Whey' : 'all';\n"
+        "  currentSize='all'; currentCategory = (currentTab==='whey') ? (CATEGORIES[0]||'all') : 'all';\n"
         "  // Sort key par défaut du tab\n"
         "  sortKey = (TAB_PRIMARY[currentTab]||TAB_PRIMARY.whey).sort;\n"
         "  sortAsc = true;\n"
@@ -1698,13 +1790,18 @@ def generate_dashboard(rows=None):
         "  document.querySelectorAll('.whey-only').forEach(el=>{\n"
         "    el.classList.toggle('tab-hidden', currentTab!=='whey');\n"
         "  });\n"
+        "  // Sur le tab Global on cache aussi le chart bar principal (mélange whey/oméga/créatine pas pertinent).\n"
+        "  document.getElementById('primaryChartWrap').classList.toggle('tab-hidden', currentTab==='global');\n"
         "  // catRow visible uniquement sur whey (Whey/Aliments enrichis/Autres)\n"
         "  document.getElementById('catRow').classList.toggle('tab-hidden', currentTab!=='whey');\n"
-        "  // typeTagRow visible uniquement sur omega3/creatine\n"
+        "  // typeTagRow visible uniquement sur omega3/creatine (pas global, pas whey)\n"
         "  const typeTagRow = document.getElementById('typeTagRow');\n"
-        "  typeTagRow.style.display = currentTab==='whey' ? 'none' : 'flex';\n"
+        "  typeTagRow.style.display = (currentTab==='omega3'||currentTab==='creatine') ? 'flex' : 'none';\n"
         "  if(currentTab==='omega3') document.getElementById('typeTagLabel').textContent='Forme';\n"
         "  if(currentTab==='creatine') document.getElementById('typeTagLabel').textContent='Type';\n"
+        "  // Met à jour le titre du chart de tendance selon le tab.\n"
+        "  const meta = TREND_META[currentTab] || TREND_META.whey;\n"
+        "  document.getElementById('trendChartTitle').textContent = meta.title;\n"
         "}\n"
         "function buildTypeTagFilters(){\n"
         "  if(currentTab==='whey'){ document.getElementById('typeTagFilters').innerHTML=''; return; }\n"

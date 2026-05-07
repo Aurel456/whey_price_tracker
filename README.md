@@ -59,8 +59,9 @@ python hsn_tracker.py
 
 Le dashboard HTML affiche :
 
-- **Onglets en haut** : *Whey & protéines*, *Oméga-3*, *Créatine*. Le compteur entre parenthèses indique le nombre de produits chargés ; les onglets vides sont grisés et invitent à lancer le scraper. Chaque onglet a son propre jeu de colonnes, métriques et filtres.
+- **Onglets en haut** : *Whey & protéines*, *Oméga-3*, *Créatine*, *Global*. Le compteur entre parenthèses indique le nombre de produits chargés ; les onglets vides sont grisés et invitent à lancer le scraper. Chaque onglet a son propre jeu de colonnes, métriques et filtres. L'onglet *Global* agrège les 3 types avec une colonne Type (badge coloré) et ses propres cartes consolidées (nb DEALs / Ruptures / top de chaque catégorie).
 - **Cartes récapitulatives** adaptées à l'onglet : meilleur €/kg protéine sur whey, meilleur €/g EPA+DHA sur oméga-3, meilleur €/kg créatine sur créatine.
+- **Filtre Catégorie** (whey uniquement) : *Whey ≥70%* / *Aliments enrichis 30–70%* / *Autres <30%*. N'apparaît pas sur les autres onglets.
 - **Filtres** : taille, plus :
   - *Whey* : édulcorants (Sans édulcorant, Stévia, Sucralose, Acésulfame-K, Aspartame), type protéine (Isolat CFM, Hydrolysat, Concentré, Native, Caséine, Végétal, Isolat).
   - *Oméga-3* : forme (Triglycéride TG, Ester éthylique EE, IFOS certifié).
@@ -68,7 +69,9 @@ Le dashboard HTML affiche :
 - **Bascule ET / OU** par groupe de filtres : chaque rangée à puces a un chip "OU/ET" en tête pour combiner les choix en intersection ou en union (par défaut OU). Les groupes restent en ET entre eux.
 - **Filtres labels persos** : chaque label saisi dans le dashboard devient un filtre cliquable, avec le même toggle ET/OU.
 - **Recherche** par nom de produit (et note libre) et **tri** par n'importe quelle colonne. La sort key par défaut s'adapte au tab.
-- **Graphiques** : 3 barres sur whey (€/kg prot, €/30g prot, €/kg produit), 1 barre sur oméga-3 (€/g EPA+DHA) et créatine (€/kg créatine). Tendance historique sur whey uniquement.
+- **Graphiques** : 3 barres sur whey (€/kg prot, €/30g prot, €/kg produit), 1 barre sur oméga-3 (€/g EPA+DHA) et créatine (€/kg créatine). Sur *Global*, le bar chart principal est masqué (mélange non pertinent).
+- **Tendance historique adaptative** : la métrique du graphique d'évolution s'adapte au tab — €/kg protéine (whey), €/g EPA+DHA (oméga), €/kg créatine (créatine), prix nominal (global). Le bouton **🔥 Tous les DEALs** sélectionne automatiquement toutes les courbes flagées DEAL du tab courant (limité à 8).
+- **Colonne `g EPA+DHA / pack`** sur l'onglet oméga-3 : quantité totale d'EPA+DHA fournie par le pack (capsules × (EPA+DHA mg/cap) / 1000).
 - **Badge Deal** : signale les produits dont le prix actuel est inférieur à leur moyenne historique (-5%).
 - **Édition de tags & note** par produit (✏️ sur chaque ligne) : labels persos + note libre, stockés en `localStorage` puis exportables vers `tags.json` via le bouton 📥.
 - **Pill ❓ "à classer"** sur les whey sans ingrédients capturés ou sans tag détecté.

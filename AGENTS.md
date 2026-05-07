@@ -49,10 +49,12 @@ Notes consolidées des erreurs et apprentissages rencontrés lors du dev. À lir
   - `HISTORY` : array de courbes `{produit, taille, points: [{date, pxkgProt, ...}]}`.
   - `LOCAL_TAGS` : édits manuels en `localStorage` (jamais écrasé par `RAW`).
 - **Filtres en cascade** : `getFiltered()` filtre RAW d'abord par tab, puis catégorie, puis taille, puis tags multi-select avec logique ET/OU configurable.
-- **Tabs Whey/Oméga/Créatine** : toujours visibles avec compteur `(n)`. Onglet vide = grisé + message "lance le scraper" dans la table. Ne pas masquer les onglets dynamiquement.
-- **Colonnes du tableau** : pilotées par `TAB_COLS[currentTab]`. Quand tu ajoutes une métrique tab-spécifique, c'est ici, pas dans le HTML statique.
+- **Tabs Whey/Oméga/Créatine/Global** : toujours visibles avec compteur `(n)`. Onglet vide = grisé + message "lance le scraper" dans la table. Ne pas masquer les onglets dynamiquement. L'onglet **Global** agrège tous les types et désactive le bar chart principal.
+- **Colonnes du tableau** : pilotées par `TAB_COLS[currentTab]`. Quand tu ajoutes une métrique tab-spécifique, c'est ici, pas dans le HTML statique. La colonne `type` (badge) sur Global utilise `fmt:'typeBadge'` et nécessite `TYPE_BADGE_LABEL` côté JS.
 - **Best-cell highlight** : pour qu'une colonne soit marquée comme "meilleure", elle doit avoir `best:true` dans `TAB_COLS`. C'est le min de la colonne sur le filtre courant.
 - **Sort key** : `TAB_PRIMARY[tab].sort` définit le tri par défaut quand on switch d'onglet.
+- **Tendance par tab** : `TREND_META[tab]` définit `{key, decs, unit, title}`. La clé est lue dans `HISTORY[].points[]` — donc si tu ajoutes une nouvelle métrique de tendance, tu dois aussi la stocker dans `history_by_key.append(...)` côté Python (sinon `dm[p.date]=undefined`).
+- **Filtre Catégorie restreint à whey** : `CATEGORIES` filtre `r.type==='whey'` côté JS — Oméga-3 et Créatine ne doivent JAMAIS apparaître comme boutons catégorie (le filtre n'est visible que sur le tab whey de toute façon, mais c'est défensif).
 
 ## Pièges JS
 
@@ -66,6 +68,7 @@ Notes consolidées des erreurs et apprentissages rencontrés lors du dev. À lir
 2. Si tu touches au dashboard → regen via `from hsn_tracker import generate_dashboard; generate_dashboard()` à chaque itération. Pas besoin de rescrap.
 3. Si tu touches au scraping → test ciblé sur 1-2 URLs avant de lancer le full scrape (cf. les helpers ponctuels supprimés `_test_new_urls.py`).
 4. **Toujours regen le dashboard** après modif data ou JS, sinon le HTML qui est versionné reflète l'ancien état.
+5. **À la fin de chaque phase d'implémentation, proposer un `git commit -m "..."` rapide** avec un message court qui résume les changements. Ne pas commit soi-même sans validation — juste afficher la commande au user pour qu'il valide / ajuste.
 
 ## Détection rupture de stock
 
