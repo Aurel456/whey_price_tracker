@@ -12,6 +12,7 @@ Dépendances: pip install playwright openpyxl
 
 import asyncio
 import json
+import random
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from playwright_stealth import Stealth
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 EXCEL_PATH       = Path(__file__).parent / "whey_prices.xlsx"
@@ -70,7 +72,19 @@ CREATINE_URLS = [
 
 PAGE_TIMEOUT = 30_000
 CLICK_WAIT   = 700
-CONCURRENCY  = 4
+# Concurrence baissée de 4→2 : Cloudflare a commencé à bloquer les pages produit
+# vers le 2026-05-08 avec 4 workers parallèles. À 2, on reste sous le radar.
+CONCURRENCY  = 2
+
+# User-agents réalistes (Chrome/Firefox/Safari récents desktop). Rotation aléatoire
+# par session pour éviter le pattern "même UA sur N requêtes" qui aide la détection.
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+]
 
 PORT_RE = re.compile(
     r'(?:DDM:\s*([\d/]+)\s*\|)?\s*PORT\.:\s*(\d+)'
@@ -252,18 +266,13 @@ def extract_spconfig(page_source: str):
     )
     if not m:
         return None
-    start = m.start(1)
-    depth, end = 0, start
-    for i in range(start, min(len(page_source), start + 300_000)):
-        if page_source[i] == '{':
-            depth += 1
-        elif page_source[i] == '}':
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
+    # Utilise json.JSONDecoder.raw_decode qui suit la syntaxe JSON (échappements,
+    # strings, etc.) et retourne la position de fin — bien plus fiable que de
+    # compter naïvement les `{`/`}`, qui se casse quand le JSON embarque des SVG
+    # inline contenant des accolades dans des paths.
     try:
-        return json.loads(page_source[start:end + 1])
+        obj, _ = json.JSONDecoder().raw_decode(page_source, m.start(1))
+        return obj
     except json.JSONDecodeError:
         return None
 
@@ -2119,17 +2128,32 @@ async def main():
     print(f"{'='*62}")
 
     async with async_playwright() as p:
+        # IMPORTANT : Cloudflare a commencé à bloquer le scraping vers le 2026-05-08.
+        # Le mode headless legacy (`headless=True`) est détecté immédiatement (HTTP 403
+        # "Sorry, you have been blocked"). La combinaison qui passe :
+        #   - `--headless=new`     : nouveau renderer headless Chrome (signature similaire au mode visible)
+        #   - playwright-stealth   : patch les fingerprints classiques (navigator.webdriver, etc.)
+        #   - UA rotatif réaliste  : évite le pattern "même UA sur N requêtes"
+        # Ce qui NE marche PAS (testé) : stealth seul, warmup via la home,
+        # baisser la concurrence seule. Le mode headless est le facteur déterminant.
         browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"],
+            headless=False,  # `False` ici car on passe `--headless=new` en arg Chrome.
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--headless=new",
+                "--disable-blink-features=AutomationControlled",
+            ],
         )
+        ua = random.choice(USER_AGENTS)
+        print(f"  user-agent: {ua[:60]}...")
         context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
+            user_agent=ua,
+            locale="fr-FR",
+            timezone_id="Europe/Paris",
+            viewport={"width": 1366, "height": 900},
         )
+        await Stealth().apply_stealth_async(context)
         # Bloque les ressources inutiles pour aller plus vite
         await context.route(
             "**/*",

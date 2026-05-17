@@ -7,6 +7,24 @@ Notes consolidées des erreurs et apprentissages rencontrés lors du dev. À lir
 - **Toujours** utiliser `C:\Users\Aurel\.conda\envs\hsn_tracker\python.exe` (pas `python` nu, pas un `.venv` racine). Le bare `python` peut résoudre vers une autre install qui n'a pas Playwright.
 - Console Windows en `cp1252` par défaut → tout caractère hors latin-1 (flèches `←`, emojis, etc.) cause un `UnicodeEncodeError` au `print`. Utiliser des ascii-fallbacks (`<-`, `->`) dans les scripts ad-hoc, ou wrapper avec `sys.stdout.reconfigure(encoding='utf-8')` si possible.
 
+## Anti-bot Cloudflare (2026-05)
+
+HSN est passé derrière Cloudflare avec une détection stricte sur les pages produit (la home et les listes catégories passent toujours). Sans précautions → HTTP 403 `Sorry, you have been blocked`. Combinaison validée qui débloque :
+
+1. **`--headless=new`** : nouveau renderer headless Chrome (passé en arg, avec `headless=False` côté Playwright). L'ancien headless est immédiatement détecté — c'est LE facteur déterminant. Le mode visible (`headless=False` sans `--headless=new`) marche aussi mais ouvre une fenêtre.
+2. **`playwright-stealth`** : `await Stealth().apply_stealth_async(context)` patche `navigator.webdriver`, plugins fictifs, etc.
+3. **UA rotatif** depuis `USER_AGENTS` (Chrome/Firefox/Safari récents desktop).
+4. **`--disable-blink-features=AutomationControlled`** + `locale='fr-FR'`, `timezone_id='Europe/Paris'`, `viewport` réaliste.
+5. **Concurrence baissée à 2** (au lieu de 4) — Cloudflare a commencé à bloquer après quelques jours à 4 workers.
+
+Ce qui NE marche PAS (testé) : stealth seul en headless legacy, warmup via la home, baisser la concurrence seule. Le mode headless est le déterminant.
+
+Pour le workflow GitHub Actions : `--headless=new` ne demande pas de display X (c'est un mode interne Chrome), donc pas besoin de xvfb a priori — à confirmer en CI.
+
+## Parseur spconfig (initConfigurableOptions)
+
+Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...})`. Ce JSON contient des SVG inline (icônes formats `Monodose`, `Pack`, etc.) avec des `{` dans les `viewBox` / paths. **Compter naïvement les `{`/`}` casse** — utiliser `json.JSONDecoder().raw_decode(source, idx)` qui suit la syntaxe JSON (strings + escapes). Bug observé 2026-05 quand HSN a ajouté les SVG icônes.
+
 ## Structure Excel & migrations
 
 - Les en-têtes Excel sont la source de vérité. `load_or_create_workbook()` ajoute automatiquement les colonnes manquantes en queue : pas besoin de migration manuelle quand on étend `HEADERS`.
