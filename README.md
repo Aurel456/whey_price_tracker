@@ -116,8 +116,8 @@ Paramètres ajustables en haut du script :
 | `CLICK_WAIT` | `700` | Délai (ms) après sélection d'une taille. À augmenter si certaines tailles renvoient des données vides. |
 | `PAGE_TIMEOUT` | `30000` | Timeout (ms) de chargement d'une page. |
 | `RETRY_ATTEMPTS` | `1` | Nombre de retentatives si un produit échoue (timeout ou résultat vide). |
-| `PROT_MIN_PCT` | `30.0` | Seuil bas du sanity check (%). En dessous : erreur loggée. |
-| `PROT_MAX_PCT` | `95.0` | Seuil haut du sanity check (%). Au-dessus : erreur loggée. |
+| `PROT_MIN_PCT` | `5.0` | Borne basse du sanity check (%). Détecte uniquement les erreurs de parsing (cellule vide, mauvaise unité). NE filtre PAS par catégorie — les Aliments enrichis 30-70% sont légitimes. |
+| `PROT_MAX_PCT` | `95.0` | Borne haute du sanity check (%). Au-dessus : erreur loggée. |
 
 ## Catégories
 
@@ -154,6 +154,6 @@ Un workflow [.github/workflows/track-prices.yml](.github/workflows/track-prices.
 ## Robustesse
 
 - Retry automatique (`RETRY_ATTEMPTS=1`) sur produit qui timeout ou renvoie un résultat vide
-- Sanity check : un produit doit avoir entre 30% et 95% de protéines, sinon l'erreur est loggée dans `errors.log`
+- Sanity check : un produit whey doit avoir entre 5% et 95% de protéines (bornes larges pour ne détecter que les erreurs de parsing — la catégorisation Whey/Aliments enrichis/Autres est gérée séparément), sinon l'erreur est loggée dans `errors.log`
 - Logs détaillés des échecs dans `errors.log` (timestamp + URL + raison)
 - Blocage des ressources inutiles (images, polices, CSS) pour accélérer le scraping

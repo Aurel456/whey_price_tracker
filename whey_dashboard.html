@@ -44,6 +44,15 @@ th.sortable.sort-asc .sort-arrow, th.sortable.sort-desc .sort-arrow { opacity: 1
 .oos-badge { display: inline-block; background: #FFF0EE; color: #B23B3B; border: 0.5px solid #F5C7C7; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
 .trend-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .trend-controls select { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 12px; max-width: 360px; }
+.trend-range-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 8px 0 12px; padding: 8px 10px; background: #f8f9fb; border-radius: 6px; }
+.trend-range-slider { position: relative; flex: 1; min-width: 220px; max-width: 480px; height: 28px; display: flex; align-items: center; }
+.trend-range-track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 4px; background: #ddd; border-radius: 2px; }
+.trend-range-fill { position: absolute; top: 50%; transform: translateY(-50%); height: 4px; background: #378ADD; border-radius: 2px; pointer-events: none; }
+.trend-range-slider input[type=range] { position: absolute; left: 0; right: 0; top: 0; bottom: 0; width: 100%; margin: 0; background: none; pointer-events: none; -webkit-appearance: none; appearance: none; }
+.trend-range-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #378ADD; cursor: pointer; pointer-events: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+.trend-range-slider input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #378ADD; cursor: pointer; pointer-events: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+.trend-range-slider input[type=range]::-webkit-slider-runnable-track { background: transparent; border: none; }
+.trend-range-slider input[type=range]::-moz-range-track { background: transparent; border: none; }
 .filter-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 .filter-row .flbl { font-size: 11px; color: #888; min-width: 110px; text-transform: uppercase; letter-spacing: 0.5px; }
 .filter-btn.sm { font-size: 11px; padding: 3px 10px; }
@@ -122,6 +131,17 @@ th.sortable.sort-asc .sort-arrow, th.sortable.sort-desc .sort-arrow { opacity: 1
     <button onclick='clearTrendItems()' style='padding:5px 12px;border:1px solid #ccc;background:#fff;color:#666;border-radius:6px;font-size:12px;cursor:pointer;'>Tout effacer</button>
   </div>
   <div id='trendSelected' style='display:flex;gap:6px;flex-wrap:wrap;min-height:24px;margin-top:8px;margin-bottom:4px;'></div>
+  <div class='trend-range-bar'>
+    <span class='flbl' style='min-width:auto'>Période</span>
+    <span id='trendRangeChips' style='display:flex;gap:6px;flex-wrap:wrap;'></span>
+    <div class='trend-range-slider' id='trendSliderWrap'>
+      <div class='trend-range-track'></div>
+      <div class='trend-range-fill' id='trendSliderFill'></div>
+      <input type='range' id='trendSliderMin' min='0' max='0' value='0' step='1'>
+      <input type='range' id='trendSliderMax' min='0' max='0' value='0' step='1'>
+    </div>
+    <span id='trendRangeLabel' style='font-size:11px;color:#666;white-space:nowrap;'></span>
+  </div>
   <div style='position:relative;height:280px;'><canvas id='chartTrend'></canvas></div>
 </div>
 <div class='chart-wrap'>
@@ -254,6 +274,21 @@ let searchQuery = '';
 let sortKey = 'pxkgProt', sortAsc = true;
 let chartPxkgProt, chartCout30, chartPxkg, chartTrend;
 let selectedTrendIndices = [];
+// trendRangeMode : 'all' | '7d' | '30d' | '90d' | '1y' | 'custom'
+// Quand un chip est cliqué → calcule la fenêtre depuis aujourd'hui et la pousse dans le slider.
+// Quand le slider est draggé → bascule en 'custom' (les chips se désactivent).
+let trendRangeMode = 'all';
+let trendSliderIdxMin = 0, trendSliderIdxMax = 0;
+// Toutes les dates connues (union, croissant) — calculée depuis HISTORY car RAW
+// ne contient que le dernier snapshot par variant (pas l'historique complet).
+const TREND_ALL_DATES = [...new Set(HISTORY.flatMap(h=>h.points.map(p=>p.date)).filter(Boolean))].sort();
+const TREND_RANGE_PRESETS = [
+  {k:'7d',  l:'7j',  days:7},
+  {k:'30d', l:'30j', days:30},
+  {k:'90d', l:'90j', days:90},
+  {k:'1y',  l:'1A',  days:365},
+  {k:'all', l:'Tout',days:null},
+];
 let modalCurrent = null;
 function fmt(v,d=2,suf=' EUR'){return v!=null?Number(v).toFixed(d)+suf:'—';}
 function matchesGroup(values, selected, mode){
@@ -529,6 +564,95 @@ function renderTrendChips(){
   }).join('');
   document.getElementById('trendAddBtn').disabled=selectedTrendIndices.length>=8;
 }
+function buildTrendRangeChips(){
+  const el = document.getElementById('trendRangeChips');
+  if(!el) return;
+  el.innerHTML = TREND_RANGE_PRESETS.map(p=>
+    `<button class='filter-btn sm ${trendRangeMode===p.k?"active":""}' onclick='setTrendRange("${p.k}")'>${p.l}</button>`
+  ).join('') + `<button class='filter-btn sm' style='${trendRangeMode==="custom"?"border-color:#378ADD;background:#E6F1FB;color:#0C447C":"opacity:0.6"}' onclick='setTrendRange("all")' title='Reset au range complet'>${trendRangeMode==='custom'?'Custom':'⟲'}</button>`;
+}
+function initTrendSlider(){
+  const n = TREND_ALL_DATES.length;
+  const sMin = document.getElementById('trendSliderMin');
+  const sMax = document.getElementById('trendSliderMax');
+  if(!sMin || !sMax) return;
+  const maxIdx = Math.max(0, n - 1);
+  sMin.max = maxIdx; sMax.max = maxIdx;
+  // Si le state n'est pas encore initialisé, prend toute la fenêtre.
+  if(trendSliderIdxMax === 0 || trendSliderIdxMax > maxIdx){
+    trendSliderIdxMin = 0; trendSliderIdxMax = maxIdx;
+  }
+  sMin.value = trendSliderIdxMin; sMax.value = trendSliderIdxMax;
+  if(!sMin._wired){
+    sMin.addEventListener('input', onSliderInput);
+    sMax.addEventListener('input', onSliderInput);
+    sMin._wired = true; sMax._wired = true;
+  }
+  syncSliderUI();
+}
+function onSliderInput(){
+  const sMin = document.getElementById('trendSliderMin');
+  const sMax = document.getElementById('trendSliderMax');
+  let a = parseInt(sMin.value), b = parseInt(sMax.value);
+  // Garde au moins 1 jour d'écart : si on dépasse, on repousse l'autre thumb.
+  if(a > b){ if(this===sMin) sMax.value = a, b = a; else sMin.value = b, a = b; }
+  trendSliderIdxMin = a; trendSliderIdxMax = b;
+  trendRangeMode = 'custom';
+  buildTrendRangeChips();
+  syncSliderUI();
+  buildTrendChart();
+}
+function syncSliderUI(){
+  const n = TREND_ALL_DATES.length;
+  const fill = document.getElementById('trendSliderFill');
+  const lbl = document.getElementById('trendRangeLabel');
+  if(!fill || !lbl) return;
+  if(n <= 1){
+    fill.style.left='0%'; fill.style.right='0%';
+    lbl.textContent = TREND_ALL_DATES[0] || '—';
+    return;
+  }
+  const lo = (trendSliderIdxMin / (n-1)) * 100;
+  const hi = (trendSliderIdxMax / (n-1)) * 100;
+  fill.style.left = lo + '%';
+  fill.style.right = (100 - hi) + '%';
+  const d1 = TREND_ALL_DATES[trendSliderIdxMin] || '—';
+  const d2 = TREND_ALL_DATES[trendSliderIdxMax] || '—';
+  const span = trendSliderIdxMax - trendSliderIdxMin + 1;
+  lbl.textContent = `${d1} → ${d2} (${span} pt${span>1?'s':''})`;
+}
+function setTrendRange(modeKey){
+  trendRangeMode = modeKey;
+  const n = TREND_ALL_DATES.length;
+  if(n === 0){ buildTrendRangeChips(); return; }
+  const preset = TREND_RANGE_PRESETS.find(p=>p.k===modeKey);
+  if(!preset || preset.days === null){
+    // 'all' ou inconnu → toute la fenêtre
+    trendSliderIdxMin = 0;
+    trendSliderIdxMax = n - 1;
+  } else {
+    // Calcule le 1er index dont la date est >= (last - days)
+    const last = TREND_ALL_DATES[n-1];
+    const cutoff = new Date(last);
+    cutoff.setDate(cutoff.getDate() - preset.days);
+    const cutoffStr = cutoff.toISOString().slice(0,10);
+    let firstIdx = TREND_ALL_DATES.findIndex(d => d >= cutoffStr);
+    if(firstIdx < 0) firstIdx = 0;
+    trendSliderIdxMin = firstIdx;
+    trendSliderIdxMax = n - 1;
+  }
+  initTrendSlider();
+  buildTrendRangeChips();
+  buildTrendChart();
+}
+function getTrendDateWindow(){
+  // Renvoie [dateMin, dateMax] (strings ISO) selon le state courant.
+  const n = TREND_ALL_DATES.length;
+  if(n === 0) return [null, null];
+  const lo = Math.max(0, Math.min(trendSliderIdxMin, n-1));
+  const hi = Math.max(0, Math.min(trendSliderIdxMax, n-1));
+  return [TREND_ALL_DATES[lo], TREND_ALL_DATES[hi]];
+}
 function buildTrendChart(){
   if(chartTrend){chartTrend.destroy(); chartTrend=null;}
   if(!selectedTrendIndices.length){
@@ -540,7 +664,11 @@ function buildTrendChart(){
   }
   const meta = TREND_META[currentTab] || TREND_META.whey;
   const trendKey = meta.key, decs = meta.decs, unit = meta.unit;
-  const allDates=[...new Set(selectedTrendIndices.flatMap(idx=>(HISTORY[idx]||{points:[]}).points.map(p=>p.date)))].sort();
+  const [winLo, winHi] = getTrendDateWindow();
+  // Dates de l'ensemble des courbes sélectionnées, restreintes à la fenêtre courante.
+  const allDates=[...new Set(selectedTrendIndices.flatMap(idx=>(HISTORY[idx]||{points:[]}).points.map(p=>p.date)))]
+    .filter(d => (!winLo || d >= winLo) && (!winHi || d <= winHi))
+    .sort();
   const datasets=selectedTrendIndices.map((idx,i)=>{
     const h=HISTORY[idx]; if(!h) return null;
     const color=TREND_COLORS[i%TREND_COLORS.length];
@@ -629,7 +757,9 @@ function setTab(t){
   buildMetrics();
   updateCharts();
   updateTable();
-  selectedTrendIndices=[]; renderTrendChips(); buildTrendSelect(); buildTrendChart();
+  selectedTrendIndices=[]; renderTrendChips(); buildTrendSelect();
+  // Reset la fenêtre temporelle au changement de tab (Tout par défaut).
+  setTrendRange('all');
 }
 function applyTabUI(){
   // .whey-only éléments visibles uniquement sur le tab whey
@@ -786,7 +916,8 @@ buildTypeTabs();applyTabUI();
 buildMetrics();buildCategoryFilters();buildFilters();
 buildSweetFilters();buildWheyFilters();buildTypeTagFilters();buildLabelFilters();
 initCharts();
-buildTrendSelect();renderTrendChips();buildTrendChart();
+buildTrendSelect();renderTrendChips();
+buildTrendRangeChips();initTrendSlider();setTrendRange('all');
 renderTableHead();setupSearch();updateEditStatus();updateTable();
 </script>
 </body>
