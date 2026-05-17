@@ -12,8 +12,10 @@ Dépendances: pip install playwright openpyxl
 
 import asyncio
 import json
+import os
 import random
 import re
+import sys
 from datetime import date, datetime
 from pathlib import Path
 
@@ -2121,6 +2123,93 @@ def generate_dashboard(rows=None):
     print(f"Dashboard : {dash_path}")
 
 
+# ── Sanity check pré-commit ───────────────────────────────────────────────────
+# Cause racine : Cloudflare peut bloquer le scrape en cours d'exécution, ce qui
+# produit des rows avec `name="Sorry, you have been blocked"` et `price=None`.
+# Sans check, ces rows sont appendées et committées comme si c'était un snapshot
+# valide — créant 10 commits vides du 2026-05-08 au 2026-05-17 (incident résolu
+# avec --headless=new + stealth).
+#
+# Le check filtre ces rows AVANT append_rows, puis compare le nb de produits
+# uniques avec la dernière date connue. Si chute > 50% → exit non-zéro pour
+# que le workflow GitHub Actions ne commit pas.
+
+BLOCKED_NAME_RE = re.compile(r'sorry,?\s*you\s*have\s*been\s*blocked|attention\s*required|cloudflare', re.IGNORECASE)
+SANITY_MIN_RATIO = 0.5  # Min 50% des produits de la dernière date pour valider
+
+
+def _is_blocked_row(row: dict) -> bool:
+    name = (row.get("name") or "").strip()
+    if not name:
+        return False
+    return bool(BLOCKED_NAME_RE.search(name))
+
+
+def _last_date_product_count() -> tuple:
+    """Renvoie (date, nb_produits_uniques) de la dernière date dans l'Excel.
+    Renvoie (None, 0) si l'Excel n'existe pas ou est vide."""
+    if not EXCEL_PATH.exists():
+        return None, 0
+    try:
+        wb = load_workbook(EXCEL_PATH, read_only=True)
+        ws = wb["Historique"]
+        hdrs = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        if "Date" not in hdrs or "Produit" not in hdrs:
+            return None, 0
+        i_date = hdrs.index("Date")
+        i_prod = hdrs.index("Produit")
+        last_date = None
+        by_date = {}
+        for r in ws.iter_rows(min_row=2, values_only=True):
+            if not r or not r[i_date]:
+                continue
+            d = str(r[i_date])
+            if last_date is None or d > last_date:
+                last_date = d
+            by_date.setdefault(d, set()).add(str(r[i_prod] or ""))
+        if last_date is None:
+            return None, 0
+        return last_date, len(by_date.get(last_date, set()))
+    except Exception as e:
+        print(f"  [warn] lecture Excel pour sanity check : {e}")
+        return None, 0
+
+
+def sanity_check_rows(rows: list) -> tuple:
+    """Filtre les rows blocked et vérifie qu'on a un snapshot crédible.
+    Renvoie (rows_filtered, ok, raison). `ok=False` → le caller doit exit non-zéro."""
+    n_in = len(rows)
+    blocked = [r for r in rows if _is_blocked_row(r)]
+    clean = [r for r in rows if not _is_blocked_row(r)]
+    n_blocked = len(blocked)
+    n_clean = len(clean)
+
+    if n_blocked:
+        print(f"  [sanity] {n_blocked}/{n_in} rows blocked (Cloudflare) — filtrées")
+        log_error("(sanity)", f"{n_blocked} rows blocked (sur {n_in}) ignorées avant append")
+
+    if n_clean == 0:
+        return clean, False, "aucune row valide après filtrage des blocked"
+
+    n_products_today = len(set(r.get("name", "") for r in clean if r.get("name")))
+    last_date, n_products_last = _last_date_product_count()
+
+    if last_date and last_date == date.today().isoformat():
+        # Re-run du même jour : pas de comparaison utile (on s'auto-comparerait)
+        return clean, True, f"OK ({n_products_today} produits uniques, re-run du jour)"
+
+    if n_products_last == 0:
+        return clean, True, f"OK ({n_products_today} produits, pas d'historique pour comparer)"
+
+    ratio = n_products_today / n_products_last
+    if ratio < SANITY_MIN_RATIO:
+        return clean, False, (
+            f"chute brutale : {n_products_today} produits aujourd'hui vs "
+            f"{n_products_last} le {last_date} (ratio {ratio:.0%} < {SANITY_MIN_RATIO:.0%})"
+        )
+    return clean, True, f"OK ({n_products_today} produits vs {n_products_last} le {last_date}, ratio {ratio:.0%})"
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 async def main():
     print(f"\n{'='*62}")
@@ -2206,17 +2295,29 @@ async def main():
 
         await browser.close()
 
-    if all_rows:
-        print(f"\nEnregistrement de {len(all_rows)} lignes dans Excel...")
-        append_rows(all_rows)
+    # ── Sanity check : filtre les rows blocked + valide vs la veille ────────
+    clean_rows, ok, reason = sanity_check_rows(all_rows)
+    print(f"\n[sanity] {reason}")
+    if not ok:
+        # Override possible via env var (utile pour re-jouer manuellement après incident)
+        if os.environ.get("SANITY_SKIP") == "1":
+            print("  [sanity] SANITY_SKIP=1 → on passe outre et on écrit quand même")
+        else:
+            log_error("(sanity)", f"REFUS commit : {reason}")
+            print("  Refus d'append/commit. Override : SANITY_SKIP=1 python hsn_tracker.py")
+            sys.exit(1)
+
+    if clean_rows:
+        print(f"\nEnregistrement de {len(clean_rows)} lignes dans Excel...")
+        append_rows(clean_rows)
         print(f"Excel OK : {EXCEL_PATH}")
         print("Generation du dashboard HTML...")
         generate_dashboard()
-        print(f"Termine ! {len(all_rows)} entrees pour le {date.today().isoformat()}")
+        print(f"Termine ! {len(clean_rows)} entrees pour le {date.today().isoformat()}")
     else:
         print("Aucune donnee collectee.")
 
-    return all_rows
+    return clean_rows
 
 
 if __name__ == "__main__":
