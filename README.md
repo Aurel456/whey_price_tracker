@@ -139,6 +139,17 @@ git commit -m "description du changement"
 git push
 ```
 
+### Filtrer les daily commits du `git log`
+
+Le workflow GitHub Actions ajoute un commit `Daily price update — YYYY-MM-DD` chaque jour, ce qui noie les vrais commits "code" dans le log. Un alias git local filtre ces commits automatiques :
+
+```bash
+git config --local alias.dev-log "log --invert-grep --grep=^Daily --oneline"
+git dev-log -20   # → uniquement les commits "code", sans les daily updates
+```
+
+L'alias est local au repo (déjà installé sur ta machine). À refaire après un clone.
+
 ## Automatisation cloud (GitHub Actions)
 
 Un workflow [.github/workflows/track-prices.yml](.github/workflows/track-prices.yml) tourne tous les jours à 9h UTC sur les serveurs GitHub. Il :
