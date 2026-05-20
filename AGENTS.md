@@ -109,6 +109,14 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 - Lors d'un changement de catégorie ou d'onglet, vider `selectedTrendIndices` + appeler `renderTrendChips()` pour réinitialiser l'UI.
 - Les dates sont agrégées sur l'union de tous les points (`flatMap` + `Set` + `sort`). Les trous sont comblés par `spanGaps:true`.
 
+### Deux charts d'évolution (tendance + prix nominal)
+
+- Le dashboard a 2 charts de tendance empilés : `chartTrend` (métrique du tab : EUR/kg prot, EUR/g EPA+DHA, EUR/kg créatine) et `chartTrendPrice` (prix nominal EUR). Sur le tab Global, `chartTrendPrice` est caché (`trendPriceWrap` → `tab-hidden`) car le chart principal montre déjà le prix nominal.
+- **Les 2 charts partagent `selectedTrendIndices` et `getTrendDateWindow()`** — la synchro vient de `buildTrendChart()` qui appelle `buildTrendPriceChart()` à la fin. **Penser à l'appeler aussi dans la branche early-return** (sélection vide) sinon "Tout effacer" laisse l'autre chart figé.
+- **Alignement visuel des x-axes** : forcer la largeur du y-axis identique sur les 2 charts via `afterFit:(scale)=>{scale.width=78}`. Sans ça, les labels y de largeurs différentes (`30.00 EUR` vs `0.025 EUR`) décalent les x-axes et les dates ne tombent plus l'une sous l'autre.
+- **Filtres applicables aux selects/boutons trend** : `buildTrendSelect()`, `addAllDeals()` et `addAllFiltered()` doivent tous respecter `currentTab` + `currentCategory` (whey) + `currentSize`. `addAllFiltered()` utilise `getFiltered()` (filtre complet incluant édulcorants/types/labels/recherche) — pratique pour tracer "tous les produits visibles dans le tableau".
+- Le filtre Taille rebuild le select via `filterSize → buildTrendSelect()`. Les courbes déjà sélectionnées AVANT le changement de taille restent affichées (pas auto-nettoyées — l'utilisateur peut retirer via × ou "Tout effacer").
+
 ## Ne pas faire
 
 - Ne pas filtrer silencieusement des rows dans `generate_dashboard` sans un commentaire expliquant pourquoi (cf. l'incident px_kg/oméga).

@@ -128,6 +128,7 @@ th.sortable.sort-asc .sort-arrow, th.sortable.sort-desc .sort-arrow { opacity: 1
     <select id='trendAddSelect' style='flex:1;min-width:0;max-width:340px;'></select>
     <button id='trendAddBtn' onclick='addTrendItem()' style='padding:5px 12px;border:1px solid #378ADD;background:#fff;color:#185FA5;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;'>+ Ajouter</button>
     <button onclick='addAllDeals()' title='Sélectionne automatiquement toutes les courbes flaguées DEAL (max 8)' style='padding:5px 12px;border:1px solid #FF6B35;background:#fff;color:#FF6B35;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;font-weight:600;'>🔥 Tous les DEALs</button>
+    <button onclick='addAllFiltered()' title='Ajoute tous les produits actuellement filtrés (max 8)' style='padding:5px 12px;border:1px solid #378ADD;background:#fff;color:#185FA5;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;font-weight:600;'>＋ Tous filtrés</button>
     <button onclick='clearTrendItems()' style='padding:5px 12px;border:1px solid #ccc;background:#fff;color:#666;border-radius:6px;font-size:12px;cursor:pointer;'>Tout effacer</button>
   </div>
   <div id='trendSelected' style='display:flex;gap:6px;flex-wrap:wrap;min-height:24px;margin-top:8px;margin-bottom:4px;'></div>
@@ -143,6 +144,10 @@ th.sortable.sort-asc .sort-arrow, th.sortable.sort-desc .sort-arrow { opacity: 1
     <span id='trendRangeLabel' style='font-size:11px;color:#666;white-space:nowrap;'></span>
   </div>
   <div style='position:relative;height:280px;'><canvas id='chartTrend'></canvas></div>
+</div>
+<div class='chart-wrap' id='trendPriceWrap'>
+  <div class='section-title'>Évolution dans le temps (Prix)</div>
+  <div style='position:relative;height:280px;'><canvas id='chartTrendPrice'></canvas></div>
 </div>
 <div class='chart-wrap'>
   <div class='section-title'>Données complètes</div>
@@ -272,7 +277,7 @@ let selectedTypeTags = new Set();
 let swLogic = 'OR', wtLogic = 'OR', lblLogic = 'OR', ttLogic = 'OR';
 let searchQuery = '';
 let sortKey = 'pxkgProt', sortAsc = true;
-let chartPxkgProt, chartCout30, chartPxkg, chartTrend;
+let chartPxkgProt, chartCout30, chartPxkg, chartTrend, chartTrendPrice;
 let selectedTrendIndices = [];
 // trendRangeMode : 'all' | '7d' | '30d' | '90d' | '1y' | 'custom'
 // Quand un chip est cliqué → calcule la fenêtre depuis aujourd'hui et la pousse dans le slider.
@@ -505,6 +510,7 @@ function buildTrendSelect(){
   const filtered=HISTORY.map((h,i)=>({h,i})).filter(x=>{
     if(currentTab!=='global' && x.h.type && x.h.type!==currentTab) return false;
     if(currentTab==='whey' && currentCategory!=='all' && x.h.categorie!==currentCategory) return false;
+    if(currentSize!=='all' && x.h.taille!==currentSize) return false;
     return true;
   });
   sel.innerHTML=filtered.map(({h,i})=>`<option value='${i}'>${h.produit} — ${h.taille} (${h.points.length} pts)</option>`).join('');
@@ -518,11 +524,23 @@ function addAllDeals(){
     if(!r.isDeal) return;
     if(currentTab!=='global' && (r.type||'whey')!==currentTab) return;
     if(currentTab==='whey' && currentCategory!=='all' && r.categorie!==currentCategory) return;
+    if(currentSize!=='all' && r.taille!==currentSize) return;
     dealKeys.add(r.produit + '|' + r.taille);
   });
   const indices = [];
   HISTORY.forEach((h,i)=>{
     if(dealKeys.has(h.produit + '|' + h.taille)) indices.push(i);
+  });
+  selectedTrendIndices = indices.slice(0, 8);
+  renderTrendChips(); buildTrendChart();
+}
+function addAllFiltered(){
+  // Ajoute toutes les courbes correspondant aux filtres courants (tab/cat/taille/édulcorants/labels/recherche).
+  // Cap à 8 séries — la limite globale du chart de tendance.
+  const filteredKeys = new Set(getFiltered().map(r => r.produit + '|' + r.taille));
+  const indices = [];
+  HISTORY.forEach((h,i)=>{
+    if(filteredKeys.has(h.produit + '|' + h.taille)) indices.push(i);
   });
   selectedTrendIndices = indices.slice(0, 8);
   renderTrendChips(); buildTrendChart();
@@ -660,6 +678,7 @@ function buildTrendChart(){
       type:'line',data:{labels:[],datasets:[]},
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}
     });
+    buildTrendPriceChart();
     return;
   }
   const meta = TREND_META[currentTab] || TREND_META.whey;
@@ -685,7 +704,42 @@ function buildTrendChart(){
       plugins:{legend:{display:datasets.length>1,position:'top',labels:{font:{size:11},boxWidth:12}},
         tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?Number(ctx.parsed.y).toFixed(decs)+unit:'N/A'}`}}},
       scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:35}},
-        y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},callback:v=>Number(v).toFixed(decs)+unit},beginAtZero:false}}}
+        y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},callback:v=>Number(v).toFixed(decs)+unit},beginAtZero:false,afterFit:(scale)=>{scale.width=78;}}}}
+  });
+  buildTrendPriceChart();
+}
+function buildTrendPriceChart(){
+  if(chartTrendPrice){chartTrendPrice.destroy(); chartTrendPrice=null;}
+  const canvas = document.getElementById('chartTrendPrice');
+  if(!canvas) return;
+  if(!selectedTrendIndices.length){
+    chartTrendPrice=new Chart(canvas,{
+      type:'line',data:{labels:[],datasets:[]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}
+    });
+    return;
+  }
+  const [winLo, winHi] = getTrendDateWindow();
+  const allDates=[...new Set(selectedTrendIndices.flatMap(idx=>(HISTORY[idx]||{points:[]}).points.map(p=>p.date)))]
+    .filter(d => (!winLo || d >= winLo) && (!winHi || d <= winHi))
+    .sort();
+  const datasets=selectedTrendIndices.map((idx,i)=>{
+    const h=HISTORY[idx]; if(!h) return null;
+    const color=TREND_COLORS[i%TREND_COLORS.length];
+    const dm={}; h.points.forEach(p=>{dm[p.date]=p.prix;});
+    return{label:`${h.produit.slice(0,24)} — ${h.taille}`,
+      data:allDates.map(d=>dm[d]??null),
+      borderColor:color,backgroundColor:color+'22',
+      tension:0.2,pointRadius:4,fill:false,spanGaps:true};
+  }).filter(Boolean);
+  chartTrendPrice=new Chart(canvas,{
+    type:'line',
+    data:{labels:allDates,datasets},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:datasets.length>1,position:'top',labels:{font:{size:11},boxWidth:12}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?Number(ctx.parsed.y).toFixed(2)+' EUR':'N/A'}`}}},
+      scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:35}},
+        y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},callback:v=>Number(v).toFixed(2)+' EUR'},beginAtZero:false,afterFit:(scale)=>{scale.width=78;}}}}
   });
 }
 function setupTrend(){}
@@ -768,6 +822,8 @@ function applyTabUI(){
   });
   // Sur le tab Global on cache aussi le chart bar principal (mélange whey/oméga/créatine pas pertinent).
   document.getElementById('primaryChartWrap').classList.toggle('tab-hidden', currentTab==='global');
+  // Sur le tab Global, le chart de tendance principal montre déjà le prix nominal → on masque le doublon.
+  document.getElementById('trendPriceWrap').classList.toggle('tab-hidden', currentTab==='global');
   // catRow visible uniquement sur whey (Whey/Aliments enrichis/Autres)
   document.getElementById('catRow').classList.toggle('tab-hidden', currentTab!=='whey');
   // typeTagRow visible uniquement sur omega3/creatine (pas global, pas whey)
