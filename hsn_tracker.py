@@ -76,7 +76,7 @@ PAGE_TIMEOUT = 30_000
 CLICK_WAIT   = 700
 # Concurrence baissée de 4→2 : Cloudflare a commencé à bloquer les pages produit
 # vers le 2026-05-08 avec 4 workers parallèles. À 2, on reste sous le radar.
-CONCURRENCY  = 2
+CONCURRENCY  = 4
 
 # User-agents réalistes (Chrome/Firefox/Safari récents desktop). Rotation aléatoire
 # par session pour éviter le pattern "même UA sur N requêtes" qui aide la détection.
