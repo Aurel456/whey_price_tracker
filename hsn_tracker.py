@@ -1246,6 +1246,10 @@ def generate_dashboard(rows=None):
         "<h1>HSN — Suivi des prix nutrition sportive</h1>\n"
         f"<p class='sub'>Derniere mise a jour : {today_str} &nbsp;|&nbsp; "
         f"{len(all_products)} produits &nbsp;|&nbsp; {len(dates)} jour(s) de donnees</p>\n"
+        "<p style='margin:-10px 0 18px'><a href='recommandations.html' "
+        "style='display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;"
+        "color:#185FA5;background:#E6F1FB;padding:7px 14px;border-radius:10px;'>"
+        "✨ Voir la page recommandations (grand public)</a></p>\n"
         "<div class='type-tabs' id='typeTabs'></div>\n"
         "<div class='cards' id='metricCards'></div>\n"
         "<div class='filter-row' id='catRow'><span class='flbl'>Catégorie</span>"
@@ -2183,6 +2187,520 @@ def generate_dashboard(rows=None):
     dash_path = EXCEL_PATH.parent / "whey_dashboard.html"
     dash_path.write_text(html, encoding="utf-8")
     print(f"Dashboard : {dash_path}")
+
+    # Copie pour GitHub Pages : docs/index.html est servi à l'URL publique
+    # (Settings → Pages → source = main /docs). On garde whey_dashboard.html à la
+    # racine pour l'ouverture locale ; docs/index.html en est le miroir publié,
+    # régénéré en même temps pour rester synchrone.
+    docs_dir = EXCEL_PATH.parent / "docs"
+    docs_dir.mkdir(exist_ok=True)
+    pages_path = docs_dir / "index.html"
+    pages_path.write_text(html, encoding="utf-8")
+    print(f"Pages    : {pages_path}")
+
+    # Page vitrine grand public (recommandations) — réutilise les mêmes rows.
+    generate_recommendations(rows)
+
+
+# ── Page de recommandations (vitrine grand public) ────────────────────────────
+# Page HTML autonome et soignée, pensée pour des visiteurs lambda (pas le tableau
+# technique). Elle met en avant les meilleurs rapports qualité-prix par catégorie,
+# les bons plans du moment, et explique comment bien choisir. Générée depuis le
+# même dernier snapshot Excel que le dashboard.
+
+def _esc(s):
+    return (str(s if s is not None else "")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _reco_fmt_eur(v, d=2):
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):.{d}f}".replace(".", ",") + " €"
+    except (TypeError, ValueError):
+        return "—"
+
+
+# Métadonnées d'affichage par catégorie (couleur, métrique vedette, unité).
+RECO_KIND = {
+    "whey":     {"label": "Whey & protéines", "accent": "#2563eb", "soft": "#e8f1fd",
+                 "metric": "pxkgProt", "unit": "/ kg de protéine", "d": 2, "icon": "💪"},
+    "omega3":   {"label": "Oméga-3", "accent": "#e8920a", "soft": "#fdf3e0",
+                 "metric": "coutGOmega", "unit": "/ g d'EPA+DHA", "d": 3, "icon": "🐟"},
+    "creatine": {"label": "Créatine", "accent": "#7c5cdb", "soft": "#efeafb",
+                 "metric": "coutKgCrea", "unit": "/ kg", "d": 2, "icon": "⚡"},
+}
+
+
+def _omega_cap_mg(name: str) -> float:
+    """Poids total d'une capsule en mg, lu dans le nom (« … 1000mg »). Défaut 1000."""
+    m = re.search(r'(\d+)\s*mg', name or '', re.IGNORECASE)
+    return float(m.group(1)) if m else 1000.0
+
+
+def _whey_tier(whey_types: list) -> str:
+    """Gamme protéine — Vegan / Supérieure (CFM·Native) / Basique (isolat·WPC·hydrolysat) / Autre.
+    Hydrolysat classé en Basique (choix produit validé)."""
+    if "vegetal" in whey_types:
+        return "vegan"
+    if "isolat_cfm" in whey_types or "native" in whey_types:
+        return "superieure"
+    if "isolat" in whey_types or "concentre" in whey_types or "hydrolysat" in whey_types:
+        return "basique"
+    return "autre"
+
+
+_WHEY_TYPE_SHORT = {
+    "isolat_cfm": "CFM", "native": "Native", "hydrolysat": "Hydrolysat",
+    "isolat": "Isolat", "concentre": "Concentré", "caseine": "Caséine",
+    "vegetal": "Végétal", "mix": "Mix", "enzyme": "Enzymes",
+}
+_WHEY_TIER_LABEL = {"vegan": "Végétale", "superieure": "Supérieure", "basique": "Basique", "autre": "Autre"}
+
+
+def _reco_badges(it: dict) -> list:
+    """Liste de [label, classe-couleur] affichée sous chaque produit."""
+    out, t = [], it["type"]
+    if t == "whey":
+        tl = _WHEY_TIER_LABEL.get(it.get("wheyTier"))
+        if tl and tl != "Autre":
+            out.append([tl, "tier"])
+        seen = set()
+        for wt in it.get("wheyTypes", []):
+            short = _WHEY_TYPE_SHORT.get(wt)
+            if short and short not in seen:
+                out.append([short, "blue"])
+                seen.add(short)
+        if it.get("sansEdulcorant"):
+            out.append(["Sans édulcorant", "green"])
+    elif t == "omega3":
+        if it.get("concentration") is not None:
+            out.append([f"{round(it['concentration'] * 100)}% EPA+DHA", "amber"])
+        if it.get("tg"):
+            out.append(["Forme TG", "blue"])
+        if it.get("ifos"):
+            out.append(["IFOS certifié", "purple"])
+    elif t == "creatine":
+        for ct in it.get("typeTags", []):
+            out.append([CREATINE_TYPE_LABELS.get(ct, ct), "purple"])
+    return out
+
+
+def _recommendation_data(rows: list) -> list:
+    """Renvoie les lignes du dernier snapshot par (produit, taille) avec métriques,
+    tags détectés et flag deal. Mirroir simplifié de la logique de generate_dashboard
+    (latest + deal) — gardé indépendant pour ne pas risquer de casser le dashboard."""
+    from collections import defaultdict
+    history_by_key = defaultdict(list)
+    latest = {}
+    for r in rows:
+        size = str(r.get("Taille", ""))
+        if not size or "Pack" in size or "Monodose" in size:
+            continue
+        if r.get("Prix (€)") is None and r.get("Prix/kg (€)") is None:
+            continue
+        key = (str(r.get("Produit", "")), size)
+        rdate = str(r.get("Date", ""))
+        history_by_key[key].append({"date": rdate, "pxkgProt": r.get("Prix/kg protéine (€)")})
+        if key not in latest or rdate >= str(latest[key].get("Date", "")):
+            latest[key] = r
+
+    deal = {}
+    for key, hist in history_by_key.items():
+        hist.sort(key=lambda x: x["date"])
+        last_d = hist[-1]["date"] if hist else None
+        prev = [h["pxkgProt"] for h in hist if h["date"] != last_d and h["pxkgProt"] is not None]
+        avg = (sum(prev) / len(prev)) if prev else None
+        cur = hist[-1]["pxkgProt"] if hist and hist[-1]["pxkgProt"] is not None else None
+        deal[key] = bool(avg and cur and cur < avg * 0.95)
+
+    items = []
+    for (prod, size), r in latest.items():
+        url = str(r.get("URL", ""))
+        ptype = str(r.get("Type produit") or _detect_product_type(url))
+        ingr = r.get("Ingrédients") or ""
+        if ptype == "whey":
+            sweeteners = _detect_sweeteners(ingr, prod)
+            whey_types = _detect_whey_type(ingr, prod)
+            type_tags = []
+        elif ptype == "omega3":
+            sweeteners, whey_types = [], []
+            type_tags = _detect_omega3_tags(prod, ingr)
+        elif ptype == "creatine":
+            sweeteners, whey_types = [], []
+            type_tags = _detect_creatine_tags(prod, ingr)
+        else:
+            sweeteners, whey_types, type_tags = [], [], []
+
+        # Concentration EPA+DHA (oméga) = (EPA+DHA mg/cap) / poids capsule mg.
+        concentration = None
+        if ptype == "omega3":
+            epa_v = r.get("EPA (mg/dose)") or 0
+            dha_v = r.get("DHA (mg/dose)") or 0
+            cap_mg = _omega_cap_mg(prod)
+            if (epa_v or dha_v) and cap_mg:
+                concentration = round((epa_v + dha_v) / cap_mg, 3)
+
+        it = {
+            "produit": prod, "taille": size, "type": ptype, "url": url,
+            "prix": r.get("Prix (€)"),
+            "pxkgProt": r.get("Prix/kg protéine (€)"),
+            "cout30": r.get("Cout/30g protéine (€)") or r.get("Coût/30g protéine (€)"),
+            "prot": r.get("Protéines (g/100g)"),
+            "coutGOmega": r.get("Coût/g EPA+DHA (€)") or r.get("Cout/g EPA+DHA (€)"),
+            "coutKgCrea": r.get("Coût/kg créatine (€)") or r.get("Cout/kg créatine (€)"),
+            "epa": r.get("EPA (mg/dose)"), "dha": r.get("DHA (mg/dose)"),
+            "categorie": str(r.get("Catégorie") or ""),
+            "en_stock": r.get("En stock"),
+            "sweeteners": sweeteners, "wheyTypes": whey_types, "typeTags": type_tags,
+            # Champs dérivés pour le recommandeur interactif
+            "concentration": concentration,
+            "ifos": "ifos" in type_tags,
+            "tg": "form_tg" in type_tags,
+            "creapure": "creapure" in type_tags,
+            "monohydrate": "monohydrate" in type_tags,
+            "wheyTier": _whey_tier(whey_types) if ptype == "whey" else None,
+            "sansEdulcorant": "sans_edulcorant" in sweeteners,
+            "isDeal": deal.get((prod, size), False),
+        }
+        it["badges"] = _reco_badges(it)
+        items.append(it)
+    return items
+
+
+def _reco_deal_card(it) -> str:
+    kind = it["type"] if it["type"] in RECO_KIND else "whey"
+    k = RECO_KIND[kind]
+    return (
+        "<div class='deal-card'><div class='flame'>🔥 Prix en baisse</div>"
+        f"<h3>{_esc(it['produit'])}</h3>"
+        f"<div class='size'>Format {_esc(it['taille'])} · {_reco_fmt_eur(it.get('prix'))}</div>"
+        f"<div class='deal-metric' style='color:{k['accent']}'>{_reco_fmt_eur(it.get(k['metric']), k['d'])} <small>{k['unit']}</small></div>"
+        f"<a class='cta sm' style='background:{k['accent']}' href='{_esc(it['url'])}' "
+        "target='_blank' rel='noopener'>Voir →</a></div>"
+    )
+
+
+RECO_CSS = """
+:root{--whey:#2563eb;--omega:#e8920a;--crea:#7c5cdb;--deal:#ff6b35;--ink:#16203a;--muted:#667085;--bg:#f6f8fb;--card:#fff;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink);line-height:1.55;-webkit-font-smoothing:antialiased;}
+a{color:inherit;text-decoration:none;}
+.wrap{max-width:1080px;margin:0 auto;padding:0 22px;}
+.hero{background:linear-gradient(135deg,#16306e 0%,#2563eb 55%,#0ea5e9 100%);color:#fff;padding:64px 0 76px;position:relative;overflow:hidden;}
+.hero::after{content:'';position:absolute;inset:0;background:radial-gradient(circle at 82% -15%,rgba(255,255,255,.20),transparent 46%);pointer-events:none;}
+.hero .wrap{position:relative;z-index:1;}
+.eyebrow{display:inline-block;font-size:12px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.25);padding:6px 13px;border-radius:30px;margin-bottom:18px;}
+.hero h1{font-size:44px;font-weight:800;letter-spacing:-1.4px;margin-bottom:14px;}
+.hero .lead{font-size:18px;opacity:.93;max-width:600px;}
+.stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:30px;}
+.stat{background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.22);border-radius:14px;padding:13px 20px;}
+.stat b{font-size:26px;font-weight:800;display:block;line-height:1.1;}
+.stat span{font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.6px;}
+section{padding:50px 0;}
+.sec-head{margin-bottom:26px;}
+.sec-head h2{font-size:27px;font-weight:800;letter-spacing:-.6px;}
+.sec-head p{color:var(--muted);margin-top:5px;font-size:15px;}
+.pick-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;}
+.pick-card{background:var(--card);border:1px solid #e7ebf0;border-radius:20px;padding:26px 24px;position:relative;overflow:hidden;transition:transform .16s ease,box-shadow .16s ease;}
+.pick-card:hover{transform:translateY(-4px);box-shadow:0 16px 36px rgba(20,40,80,.12);}
+.topbar{height:5px;position:absolute;top:0;left:0;right:0;}
+.kind{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;padding:5px 11px;border-radius:24px;margin-bottom:15px;}
+.pick-card h3{font-size:18px;font-weight:700;margin-bottom:4px;line-height:1.3;}
+.size{color:var(--muted);font-size:13px;margin-bottom:16px;}
+.metric{font-size:34px;font-weight:800;letter-spacing:-1.2px;}
+.metric small{font-size:13px;font-weight:500;color:var(--muted);letter-spacing:0;}
+.price{font-size:13px;color:var(--muted);margin-top:6px;}
+.chips{margin:16px 0 20px;display:flex;flex-wrap:wrap;gap:6px;min-height:8px;}
+.chip{font-size:11px;padding:3px 9px;border-radius:20px;font-weight:500;}
+.chip-green{background:#e7f6ee;color:#1d7150;}.chip-red{background:#fdeeee;color:#b23b3b;}
+.chip-blue{background:#e8f1fd;color:#2257a8;}.chip-purple{background:#efeafb;color:#5a45b0;}
+.chip-amber{background:#fdf3e0;color:#9a6206;}.chip-tier{background:#eef0f4;color:#374151;font-weight:700;}
+/* Recommandeur interactif */
+.reco{background:var(--card);border:1px solid #e7ebf0;border-radius:22px;overflow:hidden;}
+.reco-cats{display:flex;gap:8px;padding:16px 16px 0;flex-wrap:wrap;}
+.reco-cat{flex:1;min-width:150px;display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:15px;border-radius:14px;border:1.5px solid #e7ebf0;background:#fff;cursor:pointer;font-weight:700;font-size:14px;color:var(--muted);transition:all .15s;}
+.reco-cat:hover{border-color:#cdd6e2;}
+.reco-cat.active{color:#fff;border-color:transparent;}
+.reco-crit{padding:18px 22px;border-bottom:1px solid #f0f3f7;display:flex;flex-direction:column;gap:13px;}
+.crit-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.crit-lbl{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;min-width:135px;}
+.seg{display:inline-flex;gap:3px;background:#f1f4f8;border-radius:11px;padding:3px;flex-wrap:wrap;}
+.seg button{border:0;background:none;padding:7px 13px;border-radius:9px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;transition:all .12s;}
+.seg button.active{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.09);}
+.toggle{border:1.5px solid #e7ebf0;background:#fff;padding:7px 13px;border-radius:11px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:7px;}
+.toggle.on{border-color:#2563eb;background:#e8f1fd;color:#1d4795;}
+.toggle .dot{width:8px;height:8px;border-radius:50%;background:#cbd3de;}
+.toggle.on .dot{background:#2563eb;}
+.reco-out{padding:24px 22px;}
+.reco-why{font-size:13px;color:var(--muted);margin-bottom:18px;}
+.reco-why b{color:var(--ink);font-weight:700;}
+.reco-best{border:1px solid #e7ebf0;border-radius:18px;padding:26px 24px;position:relative;overflow:hidden;background:#fff;}
+.reco-best .crown{position:absolute;top:18px;right:22px;font-size:13px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;opacity:.85;}
+.reco-best-name{font-size:21px;font-weight:800;letter-spacing:-.5px;margin-bottom:3px;line-height:1.25;}
+.reco-alts{margin-top:22px;}
+.reco-alts h4{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:11px;}
+.reco-empty{text-align:center;padding:34px 20px;color:var(--muted);font-size:14px;}
+.cta{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:14px;padding:11px 17px;border-radius:13px;color:#fff;transition:filter .15s;}
+.cta:hover{filter:brightness(1.07);}
+.cta.sm{font-size:13px;padding:8px 14px;border-radius:11px;margin-top:12px;}
+.rank-list{background:var(--card);border:1px solid #e7ebf0;border-radius:20px;overflow:hidden;}
+.rank-row{display:flex;align-items:center;gap:16px;padding:16px 22px;border-top:1px solid #f0f3f7;}
+.rank-row:first-child{border-top:0;}
+.rank-row .n{font-size:17px;font-weight:800;color:var(--muted);width:26px;text-align:center;flex:none;}
+.rank-row .name{flex:1;font-weight:600;min-width:0;}
+.rank-row .name a{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rank-row .name span{display:block;font-weight:400;font-size:12px;color:var(--muted);}
+.rank-row .val{font-weight:800;color:var(--whey);white-space:nowrap;}
+.rank-row .val small{font-weight:500;color:var(--muted);font-size:11px;}
+.deal-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;}
+.deal-card{background:linear-gradient(135deg,#fff,#fff7f3);border:1px solid #ffd9c7;border-radius:17px;padding:20px;}
+.deal-card .flame{font-size:12px;font-weight:700;color:var(--deal);letter-spacing:.3px;}
+.deal-card h3{font-size:15px;font-weight:700;margin:7px 0 2px;line-height:1.3;}
+.deal-card .deal-metric{margin-top:9px;font-weight:800;font-size:17px;}
+.deal-card .deal-metric small{font-weight:500;font-size:11px;color:var(--muted);}
+.edu-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:18px;}
+.edu-card{background:var(--card);border:1px solid #e7ebf0;border-radius:17px;padding:24px;}
+.edu-card .ico{font-size:26px;margin-bottom:11px;}
+.edu-card h4{font-size:16px;font-weight:700;margin-bottom:7px;}
+.edu-card p{color:var(--muted);font-size:14px;}
+.big-cta{text-align:center;margin-top:8px;}
+.big-cta a{display:inline-flex;align-items:center;gap:9px;background:var(--ink);color:#fff;padding:15px 28px;border-radius:14px;font-weight:600;font-size:15px;transition:transform .15s;}
+.big-cta a:hover{transform:translateY(-2px);}
+footer{padding:42px 0 64px;color:var(--muted);font-size:13px;text-align:center;border-top:1px solid #e7ebf0;margin-top:20px;}
+footer a{color:var(--whey);font-weight:600;}
+footer .disclaimer{max-width:560px;margin:10px auto 0;font-size:12px;opacity:.85;}
+@media(max-width:600px){.hero h1{font-size:32px;}.hero{padding:48px 0 56px;}section{padding:38px 0;}}
+"""
+
+
+def generate_recommendations(rows=None):
+    """Génère recommandations.html (racine + docs/) — page vitrine grand public."""
+    if rows is None:
+        wb = load_or_create_workbook()
+        ws = wb["Historique"]
+        hdrs = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        rows = [
+            dict(zip(hdrs, r))
+            for r in ws.iter_rows(min_row=2, values_only=True)
+            if any(v is not None for v in r)
+        ]
+
+    items = _recommendation_data(rows)
+    dates = sorted({str(r.get("Date", "")) for r in rows if r.get("Date")})
+    n_days = len(dates)
+    today_str = date.today().strftime("%d/%m/%Y")
+
+    def in_stock(it):
+        return it.get("en_stock") is not False
+
+    # Données embarquées pour le recommandeur JS : items en stock, métrique de
+    # classement présente. Les whey sont restreintes à la catégorie "Whey" (≥70 %)
+    # pour ne pas mélanger les aliments enrichis dans les recommandations protéine.
+    embed = []
+    for it in items:
+        t = it["type"]
+        if t not in RECO_KIND or not in_stock(it):
+            continue
+        metric = it.get(RECO_KIND[t]["metric"])
+        if metric is None:
+            continue
+        if t == "whey" and it.get("categorie") != "Whey":
+            continue
+        embed.append({
+            "p": it["produit"], "s": it["taille"], "t": t, "u": it["url"],
+            "px": it.get("prix"), "m": metric,
+            "tier": it.get("wheyTier"), "se": it.get("sansEdulcorant"),
+            "conc": it.get("concentration"), "ifos": it.get("ifos"), "tg": it.get("tg"),
+            "creapure": it.get("creapure"), "mono": it.get("monohydrate"),
+            "deal": it.get("isDeal"), "b": it.get("badges"),
+        })
+    data_json = json.dumps(embed, ensure_ascii=False)
+
+    deals = [it for it in items if it.get("isDeal") and in_stock(it)]
+    deals = sorted(deals, key=lambda it: (it["type"], it.get(RECO_KIND.get(it["type"], RECO_KIND["whey"])["metric"]) or 9e9))[:6]
+
+    n_products = len({it["produit"] for it in items if in_stock(it)})
+    n_deals = len(deals)
+
+    # JS du recommandeur (données + logique de filtrage/tri). Concaténation simple
+    # (pas de f-string) car le code JS contient des accolades littérales.
+    reco_js = "const ITEMS = " + data_json + ";\n" + r"""
+const KIND = {
+  whey:{label:'Whey & protéines',accent:'#2563eb',soft:'#e8f1fd',icon:'💪',unit:'/ kg de protéine',d:2},
+  omega3:{label:'Oméga-3',accent:'#e8920a',soft:'#fdf3e0',icon:'🐟',unit:"/ g d'EPA+DHA",d:3},
+  creatine:{label:'Créatine',accent:'#7c5cdb',soft:'#efeafb',icon:'⚡',unit:'/ kg',d:2}
+};
+let cat = 'whey';
+const crit = {whey:{tier:'all',se:false}, omega3:{minConc:50,ifos:true,tg:false}, creatine:{type:'all'}};
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function eur(v,d){return (v==null)?'—':(Number(v).toFixed(d).replace('.',',')+' €');}
+function chips(b){return (b||[]).map(x=>`<span class='chip chip-${x[1]}'>${esc(x[0])}</span>`).join('');}
+function setCat(c){cat=c;renderCats();renderCrit();renderOut();}
+function setC(k,v){crit[cat][k]=v;renderCrit();renderOut();}
+function togC(k){crit[cat][k]=!crit[cat][k];renderCrit();renderOut();}
+function renderCats(){
+  document.getElementById('recoCats').innerHTML=Object.keys(KIND).map(c=>{
+    const k=KIND[c], a=c===cat, st=a?`background:${k.accent};`:'';
+    return `<button class='reco-cat ${a?'active':''}' style='${st}' onclick='setCat("${c}")'>${k.icon} ${k.label}</button>`;
+  }).join('');
+}
+function seg(key,opts){
+  return `<div class='seg'>`+opts.map(o=>`<button class='${crit[cat][key]===o[0]?'active':''}' onclick='setC("${key}",${JSON.stringify(o[0])})'>${esc(o[1])}</button>`).join('')+`</div>`;
+}
+function toggle(key,label){
+  return `<button class='toggle ${crit[cat][key]?'on':''}' onclick='togC("${key}")'><span class='dot'></span>${esc(label)}</button>`;
+}
+function renderCrit(){
+  const el=document.getElementById('recoCrit'); let h='';
+  if(cat==='whey'){
+    h+=`<div class='crit-row'><span class='crit-lbl'>Gamme</span>`+seg('tier',[['all','Toutes'],['vegan','Végétale'],['basique','Basique'],['superieure','Supérieure']])+`</div>`;
+    h+=`<div class='crit-row'><span class='crit-lbl'>Préférence</span>`+toggle('se','Sans édulcorant')+`</div>`;
+  } else if(cat==='omega3'){
+    h+=`<div class='crit-row'><span class='crit-lbl'>Concentration EPA+DHA</span>`+seg('minConc',[[30,'≥ 30%'],[50,'≥ 50%'],[60,'≥ 60%']])+`</div>`;
+    h+=`<div class='crit-row'><span class='crit-lbl'>Qualité / pureté</span>`+toggle('ifos','IFOS certifié')+toggle('tg','Forme TG')+`</div>`;
+  } else {
+    h+=`<div class='crit-row'><span class='crit-lbl'>Type</span>`+seg('type',[['all','Tous'],['creapure','Creapure®'],['mono','Monohydrate']])+`</div>`;
+  }
+  el.innerHTML=h;
+}
+function matchItem(it){
+  if(it.t!==cat) return false;
+  if(cat==='whey'){const c=crit.whey; if(c.tier!=='all'&&it.tier!==c.tier)return false; if(c.se&&!it.se)return false;}
+  else if(cat==='omega3'){const c=crit.omega3; if(c.ifos&&!it.ifos)return false; if(c.tg&&!it.tg)return false; if(it.conc==null||it.conc*100<c.minConc)return false;}
+  else {const c=crit.creatine; if(c.type==='creapure'&&!it.creapure)return false; if(c.type==='mono'&&!it.mono)return false;}
+  return true;
+}
+function critSummary(){
+  if(cat==='whey'){const c=crit.whey,p=[]; p.push(c.tier==='all'?'toutes gammes':'gamme '+({vegan:'végétale',basique:'basique',superieure:'supérieure'}[c.tier])); if(c.se)p.push('sans édulcorant'); return p.join(', ');}
+  if(cat==='omega3'){const c=crit.omega3,p=['concentration ≥ '+c.minConc+'%']; if(c.ifos)p.push('IFOS'); if(c.tg)p.push('forme TG'); return p.join(', ');}
+  const c=crit.creatine; return c.type==='all'?'tous types':(c.type==='creapure'?'Creapure®':'monohydrate');
+}
+function renderOut(){
+  const k=KIND[cat];
+  const list=ITEMS.filter(matchItem).sort((a,b)=>a.m-b.m);
+  const why=`<div class='reco-why'><b>${list.length}</b> produit${list.length>1?'s':''} correspond${list.length>1?'ent':''} à : ${esc(critSummary())}.</div>`;
+  if(!list.length){
+    document.getElementById('recoOut').innerHTML=why+`<div class='reco-empty'>Aucun produit ne coche tous ces critères en stock. Essaie d'en assouplir un.</div>`;
+    return;
+  }
+  const best=list[0];
+  const bestHtml=`<div class='reco-best'><div class='topbar' style='background:${k.accent}'></div>`
+    +`<div class='kind' style='background:${k.soft};color:${k.accent}'>${k.icon} ${k.label}</div>`
+    +`<div class='crown' style='color:${k.accent}'>★ Notre reco</div>`
+    +`<div class='reco-best-name'>${esc(best.p)}</div>`
+    +`<div class='size'>Format ${esc(best.s)}</div>`
+    +`<div class='metric'>${eur(best.m,k.d)}<small> ${k.unit}</small></div>`
+    +`<div class='price'>soit ${eur(best.px,2)} le format</div>`
+    +`<div class='chips'>${chips(best.b)}</div>`
+    +`<a class='cta' style='background:${k.accent}' href='${esc(best.u)}' target='_blank' rel='noopener'>Voir le produit →</a></div>`;
+  const alts=list.slice(1,4);
+  let altHtml='';
+  if(alts.length){
+    altHtml=`<div class='reco-alts'><h4>Autres choix qui correspondent</h4><div class='rank-list'>`
+      +alts.map((it,i)=>`<div class='rank-row'><div class='n'>${i+2}</div>`
+        +`<div class='name'><a href='${esc(it.u)}' target='_blank' rel='noopener'>${esc(it.p)}</a>`
+        +`<span>Format ${esc(it.s)} · ${eur(it.px,2)}</span></div>`
+        +`<div class='val' style='color:${k.accent}'>${eur(it.m,k.d)}<small> ${k.unit}</small></div></div>`).join('')
+      +`</div></div>`;
+  }
+  document.getElementById('recoOut').innerHTML=why+bestHtml+altHtml;
+}
+renderCats();renderCrit();renderOut();
+"""
+
+    deals_section = ""
+    if deals:
+        deals_section = (
+            "<section><div class='wrap'>"
+            "<div class='sec-head'><h2>🔥 Les bons plans du moment</h2>"
+            "<p>Produits dont le prix est passé sous leur moyenne des derniers jours.</p></div>"
+            f"<div class='deal-grid'>{''.join(_reco_deal_card(it) for it in deals)}</div>"
+            "</div></section>"
+        )
+
+    edu = [
+        ("🏷️", "Le prix affiché peut tromper",
+         "Un pot moins cher n'est pas forcément le meilleur achat : tout dépend de la quantité de protéines réellement dedans. Le bon repère, c'est le <b>coût pour 1 kg de protéine pure</b> — c'est ce qui classe les produits ici."),
+        ("🥛", "Isolat ou concentré ?",
+         "Le <b>concentré</b> (70-80 % de protéines) offre le meilleur rapport qualité-prix pour la plupart des gens. L'<b>isolat</b> (≥ 90 %) est plus pur, pauvre en lactose et glucides — utile si tu digères mal le lactose ou surveilles tes macros."),
+        ("🍃", "Édulcorants : une question de goût",
+         "Sucralose et acésulfame-K sont considérés sûrs aux doses utilisées, mais certains préfèrent les éviter. Des versions <b>sans édulcorant</b> ou à la <b>stévia</b> existent — repère-les via les badges sur chaque produit."),
+        ("⚡", "Créatine : le monohydrate suffit",
+         "La créatine <b>monohydrate</b> est la forme la mieux étudiée et la moins chère. Inutile de payer plus pour des formes « avancées ». Le label <b>Creapure®</b> garantit une pureté élevée. 3 à 5 g/jour suffisent."),
+        ("🐟", "Oméga-3 : concentration + pureté",
+         "Vise une <b>concentration ≥ 50 %</b> d'EPA+DHA par capsule (pas juste « 1000 mg d'huile »). Et la certification <b>IFOS</b> garantit une oxydation (TOTOX) et des contaminants sous contrôle, lot par lot. Le recommandeur filtre sur ces deux critères."),
+        ("📅", "Mis à jour chaque jour",
+         "Les prix sont relevés automatiquement sur HSNstore chaque matin. Le badge « prix en baisse » signale les produits passés sous leur moyenne récente — pratique pour saisir une promo."),
+    ]
+    edu_html = "".join(
+        f"<div class='edu-card'><div class='ico'>{ico}</div><h4>{title}</h4><p>{body}</p></div>"
+        for ico, title, body in edu
+    )
+
+    html = (
+        "<!DOCTYPE html>\n<html lang='fr'>\n<head>\n<meta charset='UTF-8'>\n"
+        "<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n"
+        f"<title>Guide nutrition sportive HSN — meilleurs rapports qualité-prix ({today_str})</title>\n"
+        "<meta name='description' content='Les meilleures whey, oméga-3 et créatine de HSNstore au meilleur rapport qualité-prix, mis à jour chaque jour.'>\n"
+        "<link rel='preconnect' href='https://fonts.googleapis.com'>\n"
+        "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>\n"
+        "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>\n"
+        f"<style>{RECO_CSS}</style>\n</head>\n<body>\n"
+        # Hero
+        "<header class='hero'><div class='wrap'>"
+        "<span class='eyebrow'>Guide indépendant · HSNstore.fr</span>"
+        "<h1>Quelle protéine acheter,<br>au meilleur prix ?</h1>"
+        "<p class='lead'>On compare pour toi les whey, oméga-3 et créatines de HSN au vrai coût — "
+        "celui de la protéine et des actifs, pas juste le prix affiché. Mis à jour chaque jour.</p>"
+        "<div class='stats'>"
+        f"<div class='stat'><b>{n_products}</b><span>produits suivis</span></div>"
+        f"<div class='stat'><b>{n_days}</b><span>jours d'historique</span></div>"
+        f"<div class='stat'><b>{n_deals}</b><span>bons plans actifs</span></div>"
+        "</div></div></header>\n"
+        # Recommandeur interactif
+        "<section><div class='wrap'>"
+        "<div class='sec-head'><h2>🎯 Trouve ton produit idéal</h2>"
+        "<p>Choisis tes critères, on te sort le meilleur rapport qualité-prix qui correspond — "
+        "pas juste le moins cher.</p></div>"
+        "<div class='reco'>"
+        "<div class='reco-cats' id='recoCats'></div>"
+        "<div class='reco-crit' id='recoCrit'></div>"
+        "<div class='reco-out' id='recoOut'></div>"
+        "</div></div></section>\n"
+        # Deals
+        f"{deals_section}\n"
+        # Education
+        "<section><div class='wrap'>"
+        "<div class='sec-head'><h2>🎓 Comment bien choisir ?</h2>"
+        "<p>L'essentiel pour ne pas se faire avoir, en 30 secondes.</p></div>"
+        f"<div class='edu-grid'>{edu_html}</div>"
+        "</div></section>\n"
+        # CTA dashboard
+        "<section style='padding-top:0'><div class='wrap big-cta'>"
+        "<a href='__DASHBOARD_HREF__'>📊 Explorer toutes les données &amp; graphiques →</a>"
+        "</div></section>\n"
+        # Footer
+        "<footer><div class='wrap'>"
+        f"Dernière mise à jour : {today_str}"
+        " &nbsp;·&nbsp; <a href='__DASHBOARD_HREF__'>Dashboard complet</a>"
+        " &nbsp;·&nbsp; <a href='https://github.com/Aurel456/whey_price_tracker' target='_blank' rel='noopener'>Code source</a>"
+        "<p class='disclaimer'>Projet personnel, non affilié à HSNstore. Prix relevés automatiquement "
+        "sur hsnstore.fr et donnés à titre indicatif — vérifie toujours le prix sur le site avant d'acheter.</p>"
+        "</div></footer>\n"
+        f"<script>\n{reco_js}\n</script>\n"
+        "</body>\n</html>\n"
+    )
+
+    # Le lien vers le dashboard diffère selon la destination : à la racine il
+    # s'appelle whey_dashboard.html, sur GitHub Pages (docs/) c'est index.html.
+    out_root = EXCEL_PATH.parent / "recommandations.html"
+    out_root.write_text(html.replace("__DASHBOARD_HREF__", "whey_dashboard.html"), encoding="utf-8")
+    docs_dir = EXCEL_PATH.parent / "docs"
+    docs_dir.mkdir(exist_ok=True)
+    (docs_dir / "recommandations.html").write_text(html.replace("__DASHBOARD_HREF__", "index.html"), encoding="utf-8")
+    print(f"Recommandations : {out_root}")
 
 
 # ── Sanity check pré-commit ───────────────────────────────────────────────────

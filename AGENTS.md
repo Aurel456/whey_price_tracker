@@ -85,8 +85,17 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 1. Si tu touches au schéma Excel → vérifie `HEADERS`, `COL_WIDTHS`, `append_rows` (3 endroits).
 2. Si tu touches au dashboard → regen via `from hsn_tracker import generate_dashboard; generate_dashboard()` à chaque itération. Pas besoin de rescrap.
 3. Si tu touches au scraping → test ciblé sur 1-2 URLs avant de lancer le full scrape (cf. les helpers ponctuels supprimés `_test_new_urls.py`).
-4. **Toujours regen le dashboard** après modif data ou JS, sinon le HTML qui est versionné reflète l'ancien état.
+4. **Toujours regen le dashboard** après modif data ou JS, sinon le HTML qui est versionné reflète l'ancien état. `generate_dashboard()` écrit **deux** fichiers identiques : `whey_dashboard.html` (racine, ouverture locale) et `docs/index.html` (servi par GitHub Pages). Les deux doivent être committés ensemble — le workflow le fait déjà.
 5. **À la fin de chaque phase d'implémentation, proposer un `git commit -m "..."` rapide** avec un message court qui résume les changements. Ne pas commit soi-même sans validation — juste afficher la commande au user pour qu'il valide / ajuste.
+
+## Page recommandations (recommandeur interactif)
+
+- `generate_recommendations(rows)` est appelée en fin de `generate_dashboard()`. Elle écrit `recommandations.html` (racine) + `docs/recommandations.html`. Le lien vers le dashboard diffère par destination (`whey_dashboard.html` vs `index.html`) via le token `__DASHBOARD_HREF__`.
+- `_recommendation_data(rows)` calcule, par item du dernier snapshot : `concentration` (oméga = (EPA+DHA mg/cap)/poids capsule, poids lu dans le nom via `_omega_cap_mg`), `ifos`/`tg` (oméga), `creapure`/`monohydrate` (créatine), `wheyTier` (`_whey_tier`), `sansEdulcorant`, et `badges` (`_reco_badges`).
+- **Gammes whey** (`_whey_tier`) : Vegan (vegetal) / Supérieure (isolat_cfm ou native) / Basique (isolat, concentre, hydrolysat) / Autre. Hydrolysat = Basique (choix produit).
+- **Critère qualité oméga = IFOS + concentration**, PAS de TOTOX chiffré (il est dans les rapports IFOS PDF par lot, pas sur les pages produit — vérifié 2026-06). Ne pas tenter de scraper le TOTOX.
+- Le recommandeur est du **JS embarqué** : `ITEMS` (JSON des items en stock avec métrique), filtré par `matchItem()` selon `crit[cat]`, trié par métrique croissante. Les whey embarquées sont restreintes à `categorie=="Whey"` (≥70 %) pour exclure les aliments enrichis.
+- Après modif de la logique de critères, **toujours re-tester dans Playwright** que les défauts oméga (≥50 % + IFOS) sortent bien *ULTRA OMEGA-3 TG* et pas l'huile de poisson basique.
 
 ## Détection rupture de stock
 

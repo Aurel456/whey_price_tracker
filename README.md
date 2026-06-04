@@ -49,7 +49,9 @@ python hsn_tracker.py
 | `hsn_tracker.py` | Script principal (scraping + Excel + dashboard) | ✓ |
 | `requirements.txt` | Dépendances Python | ✓ |
 | `whey_prices.xlsx` | Historique des prix (créé automatiquement) | ✓ |
-| `whey_dashboard.html` | Dashboard de visualisation (généré automatiquement) | ✓ |
+| `whey_dashboard.html` | Dashboard technique (généré automatiquement) | ✓ |
+| `recommandations.html` | Page vitrine grand public : meilleurs choix par catégorie + guide (générée automatiquement) | ✓ |
+| `docs/index.html` + `docs/recommandations.html` | Copies servies par GitHub Pages (générées automatiquement) | ✓ |
 | `descriptions.json` | Descriptions courtes / mots-clés des produits (optionnel) | ✓ |
 | `tags.json` | Labels persos + notes par produit (édité depuis le dashboard) | ✓ |
 
@@ -161,6 +163,27 @@ Un workflow [.github/workflows/track-prices.yml](.github/workflows/track-prices.
 **Avantages** : tracking continu même PC éteint, et chaque jour de prix devient un commit visible dans l'historique git. Gratuit jusqu'à 2000 minutes/mois.
 
 **Déclenchement manuel** : onglet *Actions* sur GitHub → *Daily price tracking* → *Run workflow*.
+
+## Partage public (GitHub Pages)
+
+Deux pages HTML autonomes sont générées (Chart.js via CDN, données injectées, aucun backend) :
+
+- **`docs/index.html`** — le dashboard technique complet (tableaux, filtres, graphiques).
+- **`docs/recommandations.html`** — une page vitrine grand public avec un **recommandeur interactif** : le visiteur choisit ses critères (gamme whey *Vegan / Basique / Supérieure*, *sans édulcorant* ; oméga *concentration EPA+DHA ≥ X%* + *IFOS* + *forme TG* ; créatine *Creapure® / Monohydrate*) et obtient en direct le meilleur rapport qualité-prix qui correspond + des alternatives. Plus les bons plans du jour et un guide « comment bien choisir ». C'est la page à partager. Les deux pages se renvoient l'une à l'autre.
+
+  > Pour les oméga-3, le critère qualité est **IFOS + concentration ≥ 50 %** (et non un TOTOX chiffré : celui-ci vit dans les rapports IFOS par lot, pas sur les pages produit). IFOS certifie l'oxydation/TOTOX et les contaminants lot par lot — c'est le proxy fiable. Avec ces défauts, la reco sort *ULTRA OMEGA-3 TG (IFOS)* plutôt que l'huile de poisson basique (30 % de concentration).
+
+`generate_dashboard()` (appelé à chaque scrape) régénère les deux + leurs copies `docs/`.
+
+**Activation (une seule fois)** : repo GitHub → *Settings* → *Pages* → *Source* = `Deploy from a branch`, *Branch* = `main`, dossier = `/docs` → *Save*. Le site est ensuite en ligne à `https://aurel456.github.io/whey_price_tracker/`.
+
+**Mise à jour** : le workflow quotidien commit `docs/index.html` en même temps que les prix → le site public se rafraîchit tout seul chaque jour. Pas de manip.
+
+**À savoir** :
+
+- Le repo doit être **public** (GitHub Pages gratuit). Le code du scraper devient donc visible.
+- Les **tags/notes persos** sont injectés au moment de la génération (depuis `tags.json`) : les visiteurs voient tes annotations mais leurs propres édits restent dans leur navigateur (`localStorage`), sans impact sur ta version.
+- `whey_dashboard.html` à la racine reste la copie pour ouverture locale ; `docs/index.html` en est le miroir publié, régénéré simultanément.
 
 ## Robustesse
 
