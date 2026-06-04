@@ -50,8 +50,10 @@ python hsn_tracker.py
 | `requirements.txt` | Dépendances Python | ✓ |
 | `whey_prices.xlsx` | Historique des prix (créé automatiquement) | ✓ |
 | `whey_dashboard.html` | Dashboard technique (généré automatiquement) | ✓ |
-| `recommandations.html` | Page vitrine grand public : meilleurs choix par catégorie + guide (générée automatiquement) | ✓ |
-| `docs/index.html` + `docs/recommandations.html` | Copies servies par GitHub Pages (générées automatiquement) | ✓ |
+| `recommandations.html` | Page vitrine grand public : recommandeur interactif + guide (générée automatiquement) | ✓ |
+| `docs/index.html` | Accueil GitHub Pages = page recommandations (généré automatiquement) | ✓ |
+| `docs/dashboard.html` | Dashboard technique servi par GitHub Pages (généré automatiquement) | ✓ |
+| `docs/recommandations.html` | Alias de l'accueil (généré automatiquement) | ✓ |
 | `descriptions.json` | Descriptions courtes / mots-clés des produits (optionnel) | ✓ |
 | `tags.json` | Labels persos + notes par produit (édité depuis le dashboard) | ✓ |
 
@@ -166,16 +168,17 @@ Un workflow [.github/workflows/track-prices.yml](.github/workflows/track-prices.
 
 ## Partage public (GitHub Pages)
 
-Deux pages HTML autonomes sont générées (Chart.js via CDN, données injectées, aucun backend) :
+Deux pages HTML autonomes sont générées (Chart.js via CDN, données injectées, aucun backend). Sur GitHub Pages, **la page d'accueil est la page recommandations** (grand public), le dashboard technique est un cran plus loin :
 
-- **`docs/index.html`** — le dashboard technique complet (tableaux, filtres, graphiques).
-- **`docs/recommandations.html`** — une page vitrine grand public avec un **recommandeur interactif** : le visiteur choisit ses critères (gamme whey *Vegan / Basique / Supérieure*, *sans édulcorant* ; oméga *concentration EPA+DHA ≥ X%* + *IFOS* + *forme TG* ; créatine *Creapure® / Monohydrate*) et obtient en direct le meilleur rapport qualité-prix qui correspond + des alternatives. Plus les bons plans du jour et un guide « comment bien choisir ». C'est la page à partager. Les deux pages se renvoient l'une à l'autre.
+- **`docs/index.html`** *(accueil)* — la page vitrine grand public avec un **recommandeur interactif** : le visiteur choisit ses critères (gamme whey *Vegan / Basique / Supérieure*, *sans édulcorant* ; oméga *concentration EPA+DHA ≥ X%* + *IFOS* + *forme TG* ; créatine *Creapure® / Monohydrate*) et obtient en direct le meilleur rapport qualité-prix qui correspond + des alternatives. Plus les bons plans du jour et un guide « comment bien choisir ». C'est la page à partager.
+- **`docs/dashboard.html`** — le dashboard technique complet (tableaux, filtres, graphiques), accessible via le bouton « Explorer toutes les données » de la page d'accueil.
+- **`docs/recommandations.html`** — alias de la page d'accueil (conserve les anciens liens).
 
   > Pour les oméga-3, le critère qualité est **IFOS + concentration ≥ 50 %** (et non un TOTOX chiffré : celui-ci vit dans les rapports IFOS par lot, pas sur les pages produit). IFOS certifie l'oxydation/TOTOX et les contaminants lot par lot — c'est le proxy fiable. Avec ces défauts, la reco sort *ULTRA OMEGA-3 TG (IFOS)* plutôt que l'huile de poisson basique (30 % de concentration).
 
-`generate_dashboard()` (appelé à chaque scrape) régénère les deux + leurs copies `docs/`.
+`generate_dashboard()` (appelé à chaque scrape) régénère le tout. En local, le dashboard reste `whey_dashboard.html` à la racine et la reco `recommandations.html`.
 
-**Activation (une seule fois)** : repo GitHub → *Settings* → *Pages* → *Source* = `Deploy from a branch`, *Branch* = `main`, dossier = `/docs` → *Save*. Le site est ensuite en ligne à `https://aurel456.github.io/whey_price_tracker/`.
+**Activation (une seule fois)** : repo GitHub → *Settings* → *Pages* → *Source* = `Deploy from a branch`, *Branch* = `main`, dossier = `/docs` → *Save*. Le site est ensuite en ligne à `https://aurel456.github.io/whey_price_tracker/` (tombe sur la page recommandations).
 
 **Mise à jour** : le workflow quotidien commit `docs/index.html` en même temps que les prix → le site public se rafraîchit tout seul chaque jour. Pas de manip.
 

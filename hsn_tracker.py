@@ -2192,9 +2192,12 @@ def generate_dashboard(rows=None):
     # (Settings → Pages → source = main /docs). On garde whey_dashboard.html à la
     # racine pour l'ouverture locale ; docs/index.html en est le miroir publié,
     # régénéré en même temps pour rester synchrone.
+    # Landing page : sur GitHub Pages, l'accueil (docs/index.html) est la page
+    # recommandations grand public ; le dashboard technique est servi en
+    # docs/dashboard.html. En local il reste whey_dashboard.html (racine).
     docs_dir = EXCEL_PATH.parent / "docs"
     docs_dir.mkdir(exist_ok=True)
-    pages_path = docs_dir / "index.html"
+    pages_path = docs_dir / "dashboard.html"
     pages_path.write_text(html, encoding="utf-8")
     print(f"Pages    : {pages_path}")
 
@@ -2693,13 +2696,17 @@ renderCats();renderCrit();renderOut();
         "</body>\n</html>\n"
     )
 
-    # Le lien vers le dashboard diffère selon la destination : à la racine il
-    # s'appelle whey_dashboard.html, sur GitHub Pages (docs/) c'est index.html.
+    # Landing page : docs/index.html = page recommandations (accueil public).
+    # Le lien vers le dashboard diffère selon la destination :
+    #   - racine            → whey_dashboard.html
+    #   - GitHub Pages (docs/) → dashboard.html
     out_root = EXCEL_PATH.parent / "recommandations.html"
     out_root.write_text(html.replace("__DASHBOARD_HREF__", "whey_dashboard.html"), encoding="utf-8")
     docs_dir = EXCEL_PATH.parent / "docs"
     docs_dir.mkdir(exist_ok=True)
-    (docs_dir / "recommandations.html").write_text(html.replace("__DASHBOARD_HREF__", "index.html"), encoding="utf-8")
+    pages_html = html.replace("__DASHBOARD_HREF__", "dashboard.html")
+    (docs_dir / "index.html").write_text(pages_html, encoding="utf-8")            # accueil
+    (docs_dir / "recommandations.html").write_text(pages_html, encoding="utf-8")  # alias (vieux liens)
     print(f"Recommandations : {out_root}")
 
 

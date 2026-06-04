@@ -85,7 +85,8 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 1. Si tu touches au schéma Excel → vérifie `HEADERS`, `COL_WIDTHS`, `append_rows` (3 endroits).
 2. Si tu touches au dashboard → regen via `from hsn_tracker import generate_dashboard; generate_dashboard()` à chaque itération. Pas besoin de rescrap.
 3. Si tu touches au scraping → test ciblé sur 1-2 URLs avant de lancer le full scrape (cf. les helpers ponctuels supprimés `_test_new_urls.py`).
-4. **Toujours regen le dashboard** après modif data ou JS, sinon le HTML qui est versionné reflète l'ancien état. `generate_dashboard()` écrit **deux** fichiers identiques : `whey_dashboard.html` (racine, ouverture locale) et `docs/index.html` (servi par GitHub Pages). Les deux doivent être committés ensemble — le workflow le fait déjà.
+4. **Toujours regen le dashboard** après modif data ou JS, sinon le HTML qui est versionné reflète l'ancien état. `generate_dashboard()` écrit le dashboard dans `whey_dashboard.html` (racine, local) **et** `docs/dashboard.html` (Pages), puis appelle `generate_recommendations()` qui écrit `recommandations.html` (racine) + `docs/index.html` (**accueil Pages = reco**) + `docs/recommandations.html` (alias). Tous committés ensemble — le workflow le fait déjà.
+   - **Landing page** : sur GitHub Pages, `docs/index.html` = page recommandations (grand public), `docs/dashboard.html` = dashboard technique. Le lien reco→dashboard utilise le token `__DASHBOARD_HREF__` (`whey_dashboard.html` en local, `dashboard.html` sur Pages). Le lien dashboard→reco pointe sur `recommandations.html` (existe en local et comme alias docs/).
 5. **À la fin de chaque phase d'implémentation, proposer un `git commit -m "..."` rapide** avec un message court qui résume les changements. Ne pas commit soi-même sans validation — juste afficher la commande au user pour qu'il valide / ajuste.
 
 ## Page recommandations (recommandeur interactif)
