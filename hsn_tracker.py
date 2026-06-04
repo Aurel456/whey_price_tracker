@@ -1246,7 +1246,7 @@ def generate_dashboard(rows=None):
         "<h1>HSN — Suivi des prix nutrition sportive</h1>\n"
         f"<p class='sub'>Derniere mise a jour : {today_str} &nbsp;|&nbsp; "
         f"{len(all_products)} produits &nbsp;|&nbsp; {len(dates)} jour(s) de donnees</p>\n"
-        "<p style='margin:-10px 0 18px'><a href='recommandations.html' "
+        "<p style='margin:-10px 0 18px'><a href='__RECO_HREF__' "
         "style='display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;"
         "color:#185FA5;background:#E6F1FB;padding:7px 14px;border-radius:10px;'>"
         "✨ Voir la page recommandations (grand public)</a></p>\n"
@@ -2184,21 +2184,20 @@ def generate_dashboard(rows=None):
         "</html>\n"
     )
 
-    dash_path = EXCEL_PATH.parent / "whey_dashboard.html"
-    dash_path.write_text(html, encoding="utf-8")
-    print(f"Dashboard : {dash_path}")
-
-    # Copie pour GitHub Pages : docs/index.html est servi à l'URL publique
-    # (Settings → Pages → source = main /docs). On garde whey_dashboard.html à la
-    # racine pour l'ouverture locale ; docs/index.html en est le miroir publié,
-    # régénéré en même temps pour rester synchrone.
     # Landing page : sur GitHub Pages, l'accueil (docs/index.html) est la page
     # recommandations grand public ; le dashboard technique est servi en
     # docs/dashboard.html. En local il reste whey_dashboard.html (racine).
+    # Le lien dashboard→reco (__RECO_HREF__) diffère selon la destination :
+    #   - racine            → recommandations.html
+    #   - GitHub Pages (docs/) → index.html (l'accueil = la reco)
+    dash_path = EXCEL_PATH.parent / "whey_dashboard.html"
+    dash_path.write_text(html.replace("__RECO_HREF__", "recommandations.html"), encoding="utf-8")
+    print(f"Dashboard : {dash_path}")
+
     docs_dir = EXCEL_PATH.parent / "docs"
     docs_dir.mkdir(exist_ok=True)
     pages_path = docs_dir / "dashboard.html"
-    pages_path.write_text(html, encoding="utf-8")
+    pages_path.write_text(html.replace("__RECO_HREF__", "index.html"), encoding="utf-8")
     print(f"Pages    : {pages_path}")
 
     # Page vitrine grand public (recommandations) — réutilise les mêmes rows.
@@ -2705,8 +2704,7 @@ renderCats();renderCrit();renderOut();
     docs_dir = EXCEL_PATH.parent / "docs"
     docs_dir.mkdir(exist_ok=True)
     pages_html = html.replace("__DASHBOARD_HREF__", "dashboard.html")
-    (docs_dir / "index.html").write_text(pages_html, encoding="utf-8")            # accueil
-    (docs_dir / "recommandations.html").write_text(pages_html, encoding="utf-8")  # alias (vieux liens)
+    (docs_dir / "index.html").write_text(pages_html, encoding="utf-8")            # accueil Pages
     print(f"Recommandations : {out_root}")
 
 

@@ -53,7 +53,6 @@ python hsn_tracker.py
 | `recommandations.html` | Page vitrine grand public : recommandeur interactif + guide (générée automatiquement) | ✓ |
 | `docs/index.html` | Accueil GitHub Pages = page recommandations (généré automatiquement) | ✓ |
 | `docs/dashboard.html` | Dashboard technique servi par GitHub Pages (généré automatiquement) | ✓ |
-| `docs/recommandations.html` | Alias de l'accueil (généré automatiquement) | ✓ |
 | `descriptions.json` | Descriptions courtes / mots-clés des produits (optionnel) | ✓ |
 | `tags.json` | Labels persos + notes par produit (édité depuis le dashboard) | ✓ |
 
@@ -172,7 +171,6 @@ Deux pages HTML autonomes sont générées (Chart.js via CDN, données injectée
 
 - **`docs/index.html`** *(accueil)* — la page vitrine grand public avec un **recommandeur interactif** : le visiteur choisit ses critères (gamme whey *Vegan / Basique / Supérieure*, *sans édulcorant* ; oméga *concentration EPA+DHA ≥ X%* + *IFOS* + *forme TG* ; créatine *Creapure® / Monohydrate*) et obtient en direct le meilleur rapport qualité-prix qui correspond + des alternatives. Plus les bons plans du jour et un guide « comment bien choisir ». C'est la page à partager.
 - **`docs/dashboard.html`** — le dashboard technique complet (tableaux, filtres, graphiques), accessible via le bouton « Explorer toutes les données » de la page d'accueil.
-- **`docs/recommandations.html`** — alias de la page d'accueil (conserve les anciens liens).
 
   > Pour les oméga-3, le critère qualité est **IFOS + concentration ≥ 50 %** (et non un TOTOX chiffré : celui-ci vit dans les rapports IFOS par lot, pas sur les pages produit). IFOS certifie l'oxydation/TOTOX et les contaminants lot par lot — c'est le proxy fiable. Avec ces défauts, la reco sort *ULTRA OMEGA-3 TG (IFOS)* plutôt que l'huile de poisson basique (30 % de concentration).
 
