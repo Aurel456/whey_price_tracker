@@ -45,14 +45,18 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Run tracker (HSN)
-        run: python hsn_tracker.py
-
-      - name: Run tracker (MyProtein)
-        # Réutilise l'install Playwright déjà faite. `continue-on-error` : un souci
-        # côté MyProtein ne doit pas bloquer le commit des prix HSN.
-        continue-on-error: true
-        run: python myprotein_tracker.py
+      - name: Run trackers (HSN + MyProtein en parallèle)
+        # Les deux scripts écrivent des fichiers disjoints (Excel/HTML/logs séparés)
+        # → aucune contention. On les lance en arrière-plan et on attend les deux.
+        # Temps total ≈ max(HSN, MyProtein) au lieu de la somme. On NE fait jamais
+        # échouer le job ici : le sanity check de chaque script protège déjà ses
+        # propres fichiers, et l'étape commit ne pousse que ce qui a changé — un
+        # site KO n'empêche pas l'autre d'être committé.
+        run: |
+          python hsn_tracker.py & PID_HSN=$!
+          python myprotein_tracker.py & PID_MP=$!
+          wait $PID_HSN; echo "HSN exit=$?"
+          wait $PID_MP;  echo "MyProtein exit=$?"
 
       - name: Show errors log (if any)
         if: always()
