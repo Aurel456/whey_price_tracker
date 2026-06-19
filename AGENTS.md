@@ -127,6 +127,49 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 - **Filtres applicables aux selects/boutons trend** : `buildTrendSelect()`, `addAllDeals()` et `addAllFiltered()` doivent tous respecter `currentTab` + `currentCategory` (whey) + `currentSize`. `addAllFiltered()` utilise `getFiltered()` (filtre complet incluant édulcorants/types/labels/recherche) — pratique pour tracer "tous les produits visibles dans le tableau".
 - Le filtre Taille rebuild le select via `filterSize → buildTrendSelect()`. Les courbes déjà sélectionnées AVANT le changement de taille restent affichées (pas auto-nettoyées — l'utilisateur peut retirer via × ou "Tout effacer").
 
+## Multi-sites (HSN + MyProtein)
+
+- Architecture : `hsn_tracker.py` contient toute la couche **partagée** (Excel,
+  dashboard, recommandations, sanity). Elle est paramétrée par un `SiteConfig`
+  (dataclass en haut du fichier) passé en argument optionnel `cfg=HSN_CFG`. Les
+  défauts reproduisent **exactement** le comportement HSN historique — ne pas
+  changer les défauts.
+- `myprotein_tracker.py` = module mince : `import hsn_tracker as core`, son propre
+  `MP_CFG`, et **uniquement** le scraping spécifique MyProtein. Il appelle
+  `append_rows/generate_dashboard/sanity_check_rows(..., cfg=MP_CFG)`.
+- Quand tu touches à une fonction liée aux chemins (`append_rows`,
+  `generate_dashboard`, `generate_recommendations`, `sanity_check_rows`,
+  `_last_date_product_count`, `log_error`, `load_or_create_workbook`), garde le
+  paramètre `cfg` et n'utilise plus `EXCEL_PATH`/`ERROR_LOG_PATH` en dur dedans.
+- **Fichiers séparés** par site (choix utilisateur) : pas de colonne « Site », pas
+  de schéma Excel modifié. `myprotein.html` (docs/) est la landing Pages MyProtein,
+  **distincte** de `index.html` (= HSN).
+
+### Scraping MyProtein (plateforme THG/Hut)
+
+- **Rien à voir avec le Magento de HSN** : pas de `initConfigurableOptions`, pas de
+  Cloudflare. Bannière cookies **OneTrust** (`#onetrust-accept-btn-handler`).
+- **Source des variantes = `ld+json` `ProductGroup.hasVariant[]`** (pas le DOM, où
+  `data-sku` est vide). Chaque variante donne `name` (poids « 250G »/« 1KG »),
+  `sku`, `offers.price` (EUR) et `offers.availability` → prix + **stock** sans
+  interaction DOM. Gérer aussi le cas d'un `Product` simple (mono-taille).
+- **Clé de regroupement par taille = dépend du type** (observé sur le site) :
+  - **whey** : le poids net varie selon l'arôme (chocolat plus dense → « 930g »
+    pour le même pot « 1kg »), mais le **nb de portions est stable** → clé = portions.
+  - **créatine** : les arômes ajoutent des charges → portions variables à poids
+    égal, mais le **poids est stable** → clé = poids.
+  - **oméga** : clé = nb de gélules.
+  Sans ça, on obtient des dizaines de pseudo-tailles parasites (33 pour l'Impact
+  Whey). On garde la variante la moins chère en stock par bucket.
+- **Nutrition** : dans un accordéon (à **déplier** avant lecture, sinon `innerText`
+  vide). Table à colonnes `Pour 100 g` / `Par portion` — ordre **inverse** de HSN
+  (où col[2]=100g) → extracteur dédié `_parse_mp_nutrition` qui lit par **en-tête
+  de colonne**. Les oméga n'ont **pas** de colonne 100g (seulement « Par portion »)
+  → le parser doit accepter ce schéma (EPA/DHA lus en colonne portion).
+- **Pas de profil d'acides aminés** publié → €/3g leucine vide pour MyProtein.
+- Edge-case oméga vegan (algues) : parfois DHA seul sans EPA → `_enrich_row`
+  n'établit pas €/g EPA+DHA (best-effort, non bloquant).
+
 ## Ne pas faire
 
 - Ne pas filtrer silencieusement des rows dans `generate_dashboard` sans un commentaire expliquant pourquoi (cf. l'incident px_kg/oméga).

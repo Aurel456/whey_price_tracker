@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang='fr'>
+<head>
+<meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'>
+<title>MyProtein Whey Tracker — 19/06/2026</title>
+<script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js'></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; color: #222; padding: 24px; }
+h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+.sub { font-size: 12px; color: #888; margin-bottom: 20px; }
+.cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+.type-tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid #e0e0e0; }
+.type-tabs button { background: none; border: none; padding: 10px 18px; font-size: 13px; color: #888; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; }
+.type-tabs button:hover { color: #333; }
+.type-tabs button.active { color: #185FA5; border-bottom-color: #378ADD; font-weight: 600; }
+.tab-hidden { display: none !important; }
+.card { background: #fff; border-radius: 10px; padding: 16px 20px; flex: 1; min-width: 150px; border: 0.5px solid #e0e0e0; }
+.card-label { font-size: 12px; color: #888; margin-bottom: 4px; }
+.card-value { font-size: 22px; font-weight: 600; }
+.card-sub { font-size: 11px; color: #888; margin-top: 2px; }
+.best { color: #0F6E56; }
+.section-title { font-size: 13px; font-weight: 600; color: #555; margin-bottom: 8px; }
+.chart-wrap { background: #fff; border-radius: 10px; padding: 20px; margin-bottom: 20px; border: 0.5px solid #e0e0e0; }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+.filter-btn { font-size: 12px; padding: 5px 16px; border-radius: 20px; border: 1.5px solid #ccc; background: #fff; color: #555; cursor: pointer; }
+.filter-btn.active { border-color: #378ADD; background: #E6F1FB; color: #0C447C; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+th { background: #f0f0f0; padding: 8px 12px; text-align: left; font-weight: 500; color: #555; border-bottom: 1px solid #e0e0e0; }
+td { padding: 7px 12px; border-bottom: 0.5px solid #eee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+tr:nth-child(even) { background: #fafafa; }
+.best-cell { color: #0F6E56; font-weight: 600; }
+a { color: #185FA5; text-decoration: none; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12px; color: #666; }
+.legend-dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 4px; vertical-align: middle; }
+.table-toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.search-input { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 12px; width: 240px; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { background: #e8e8e8; }
+th.sortable .sort-arrow { font-size: 10px; opacity: 0.4; margin-left: 3px; }
+th.sortable.sort-asc .sort-arrow, th.sortable.sort-desc .sort-arrow { opacity: 1; color: #378ADD; }
+.deal-badge { display: inline-block; background: #FF6B35; color: #fff; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle; letter-spacing: 0.3px; }
+.oos-badge { display: inline-block; background: #FFF0EE; color: #B23B3B; border: 0.5px solid #F5C7C7; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
+.trend-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.trend-controls select { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 12px; max-width: 360px; }
+.trend-range-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 8px 0 12px; padding: 8px 10px; background: #f8f9fb; border-radius: 6px; }
+.trend-range-slider { position: relative; flex: 1; min-width: 220px; max-width: 480px; height: 28px; display: flex; align-items: center; }
+.trend-range-track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 4px; background: #ddd; border-radius: 2px; }
+.trend-range-fill { position: absolute; top: 50%; transform: translateY(-50%); height: 4px; background: #378ADD; border-radius: 2px; pointer-events: none; }
+.trend-range-slider input[type=range] { position: absolute; left: 0; right: 0; top: 0; bottom: 0; width: 100%; margin: 0; background: none; pointer-events: none; -webkit-appearance: none; appearance: none; }
+.trend-range-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #378ADD; cursor: pointer; pointer-events: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+.trend-range-slider input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #378ADD; cursor: pointer; pointer-events: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+.trend-range-slider input[type=range]::-webkit-slider-runnable-track { background: transparent; border: none; }
+.trend-range-slider input[type=range]::-moz-range-track { background: transparent; border: none; }
+.filter-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.filter-row .flbl { font-size: 11px; color: #888; min-width: 110px; text-transform: uppercase; letter-spacing: 0.5px; }
+.filter-btn.sm { font-size: 11px; padding: 3px 10px; }
+.filter-btn.green.active { border-color: #1D9E75; background: #E5F6EE; color: #0F6E56; }
+.filter-btn.purple.active { border-color: #7F77DD; background: #EFEDFA; color: #4A40A8; }
+.filter-btn.amber.active { border-color: #C7892E; background: #FAF1DF; color: #7A5215; }
+.tag-chip { display: inline-block; font-size: 9px; padding: 1px 6px; border-radius: 8px; margin: 0 3px 0 0; vertical-align: middle; line-height: 14px; }
+.tag-chip.sweet { background: #FFF1F1; color: #B23B3B; border: 0.5px solid #F5C7C7; }
+.tag-chip.sweet.none { background: #ECF8F2; color: #1D7150; border-color: #C5E5D6; }
+.tag-chip.whey { background: #EEF3FB; color: #2A5C9C; border: 0.5px solid #C8D8EE; }
+.tag-chip.lbl { background: #FAF6E3; color: #7A5215; border: 0.5px solid #E8DDA8; }
+.missing-pill { display: inline-block; background: #FFF6E0; color: #92580A; border: 0.5px solid #F0DAA0; font-size: 9px; padding: 1px 6px; border-radius: 8px; margin-left: 4px; vertical-align: middle; }
+.edit-btn { background: none; border: 0; cursor: pointer; opacity: 0.4; font-size: 13px; padding: 0 4px; vertical-align: middle; }
+.edit-btn:hover { opacity: 1; }
+.note-line { color: #666; font-style: italic; font-size: 11px; margin-top: 2px; white-space: normal; }
+.export-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; padding: 8px 12px; background: #fff; border: 0.5px dashed #d0d0d0; border-radius: 8px; flex-wrap: wrap; }
+.export-bar button { font-size: 12px; padding: 5px 12px; border-radius: 6px; border: 1px solid #378ADD; background: #fff; color: #185FA5; cursor: pointer; }
+.export-bar button:hover { background: #E6F1FB; }
+.export-bar button:disabled { color: #aaa; border-color: #ddd; cursor: default; background: #fafafa; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: none; align-items: center; justify-content: center; z-index: 1000; }
+.modal-backdrop.open { display: flex; }
+.modal { background: #fff; border-radius: 10px; padding: 22px 24px; width: 480px; max-width: 92vw; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+.modal h3 { font-size: 14px; margin-bottom: 4px; }
+.modal .pname { font-size: 12px; color: #888; margin-bottom: 14px; }
+.modal label { display: block; font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 4px; }
+.modal input, .modal textarea { width: 100%; padding: 7px 9px; font-size: 12px; border: 1px solid #ccc; border-radius: 6px; font-family: inherit; }
+.modal textarea { resize: vertical; min-height: 70px; }
+.modal .auto-block { background: #fafafa; border: 0.5px solid #eee; border-radius: 6px; padding: 8px 10px; font-size: 11px; color: #666; }
+.modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.modal .actions .primary { background: #378ADD; color: #fff; border-color: #378ADD; }
+.modal .actions .primary:hover { background: #2974C2; }
+.modal .actions .danger { color: #B23B3B; border-color: #E5BABA; }
+.modal .actions button { font-size: 12px; padding: 6px 14px; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>MyProtein — Suivi des prix nutrition sportive</h1>
+<p class='sub'>Derniere mise a jour : 19/06/2026 &nbsp;|&nbsp; 8 produits &nbsp;|&nbsp; 1 jour(s) de donnees</p>
+<p style='margin:-10px 0 18px'><a href='myprotein.html' style='display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#185FA5;background:#E6F1FB;padding:7px 14px;border-radius:10px;'>✨ Voir la page recommandations (grand public)</a></p>
+<div class='type-tabs' id='typeTabs'></div>
+<div class='cards' id='metricCards'></div>
+<div class='filter-row' id='catRow'><span class='flbl'>Catégorie</span><span id='categoryFilters' style='display:flex;gap:8px;flex-wrap:wrap;'></span></div>
+<div class='filter-row'><span class='flbl'>Taille</span><span id='filters' style='display:flex;gap:8px;flex-wrap:wrap;'></span></div>
+<div class='filter-row whey-only'><span class='flbl'>Édulcorants</span><span id='sweetFilters' style='display:flex;gap:8px;flex-wrap:wrap;'></span></div>
+<div class='filter-row whey-only'><span class='flbl'>Type protéine</span><span id='wheyFilters' style='display:flex;gap:8px;flex-wrap:wrap;'></span></div>
+<div class='filter-row' id='typeTagRow' style='display:none;'><span class='flbl' id='typeTagLabel'>Type</span><span id='typeTagFilters' style='display:flex;gap:8px;flex-wrap:wrap;'></span></div>
+<div class='filter-row' id='labelFiltersRow' style='display:none;'><span class='flbl'>Labels persos</span><span id='labelFilters' style='display:flex;gap:8px;flex-wrap:wrap;'></span></div>
+<div class='export-bar'>
+  <span style='font-size:12px;color:#666;'>📝 <span id='editStatus'>0 modifs locales</span></span>
+  <button id='exportBtn' onclick='exportTags()'>📥 Exporter tags.json</button>
+  <button onclick='clearLocalEdits()' style='border-color:#E5BABA;color:#B23B3B;'>Annuler les modifs locales</button>
+  <span id='missingCount' style='font-size:11px;color:#92580A;margin-left:auto;'></span>
+</div>
+<div class='whey-only'>
+<div class='chart-wrap'>
+  <div class='section-title'>Prix par kilo de protéine pure (EUR/kg)</div>
+  <div class='legend' id='legendPxkgProt'></div>
+  <div style='position:relative;height:300px;'><canvas id='chartPxkgProt'></canvas></div>
+</div>
+<div class='chart-wrap'>
+  <div class='section-title'>Coût pour 30g de protéine (EUR)</div>
+  <div class='legend' id='legendCout30'></div>
+  <div style='position:relative;height:300px;'><canvas id='chartCout30'></canvas></div>
+</div>
+</div>
+<div class='chart-wrap' id='primaryChartWrap'>
+  <div class='section-title' id='primaryChartTitle'>Prix au kilo de produit (EUR/kg)</div>
+  <div class='legend' id='legendPxkg'></div>
+  <div style='position:relative;height:300px;'><canvas id='chartPxkg'></canvas></div>
+</div>
+<div class='chart-wrap'>
+  <div class='section-title' id='trendChartTitle'>Évolution dans le temps (EUR/kg protéine)</div>
+  <div class='trend-controls'>
+    <select id='trendAddSelect' style='flex:1;min-width:0;max-width:340px;'></select>
+    <button id='trendAddBtn' onclick='addTrendItem()' style='padding:5px 12px;border:1px solid #378ADD;background:#fff;color:#185FA5;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;'>+ Ajouter</button>
+    <button onclick='addAllDeals()' title='Sélectionne automatiquement toutes les courbes flaguées DEAL (max 8)' style='padding:5px 12px;border:1px solid #FF6B35;background:#fff;color:#FF6B35;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;font-weight:600;'>🔥 Tous les DEALs</button>
+    <button onclick='addAllFiltered()' title='Ajoute tous les produits actuellement filtrés (max 8)' style='padding:5px 12px;border:1px solid #378ADD;background:#fff;color:#185FA5;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;font-weight:600;'>＋ Tous filtrés</button>
+    <button onclick='clearTrendItems()' style='padding:5px 12px;border:1px solid #ccc;background:#fff;color:#666;border-radius:6px;font-size:12px;cursor:pointer;'>Tout effacer</button>
+  </div>
+  <div id='trendSelected' style='display:flex;gap:6px;flex-wrap:wrap;min-height:24px;margin-top:8px;margin-bottom:4px;'></div>
+  <div class='trend-range-bar'>
+    <span class='flbl' style='min-width:auto'>Période</span>
+    <span id='trendRangeChips' style='display:flex;gap:6px;flex-wrap:wrap;'></span>
+    <div class='trend-range-slider' id='trendSliderWrap'>
+      <div class='trend-range-track'></div>
+      <div class='trend-range-fill' id='trendSliderFill'></div>
+      <input type='range' id='trendSliderMin' min='0' max='0' value='0' step='1'>
+      <input type='range' id='trendSliderMax' min='0' max='0' value='0' step='1'>
+    </div>
+    <span id='trendRangeLabel' style='font-size:11px;color:#666;white-space:nowrap;'></span>
+  </div>
+  <div style='position:relative;height:280px;'><canvas id='chartTrend'></canvas></div>
+</div>
+<div class='chart-wrap' id='trendPriceWrap'>
+  <div class='section-title'>Évolution dans le temps (Prix)</div>
+  <div style='position:relative;height:280px;'><canvas id='chartTrendPrice'></canvas></div>
+</div>
+<div class='chart-wrap'>
+  <div class='section-title'>Données complètes</div>
+  <div class='table-toolbar'>
+    <input id='searchInput' class='search-input' type='text' placeholder='Rechercher un produit...'>
+    <span id='rowCount' style='font-size:11px;color:#888'></span>
+  </div>
+  <table id='detailTable'><thead id='tableHead'></thead><tbody id='tableBody'></tbody></table>
+</div>
+<div class='modal-backdrop' id='editModal' onclick='if(event.target.id==="editModal")closeEditModal()'>
+  <div class='modal'>
+    <h3>Tags &amp; note du produit</h3>
+    <div class='pname' id='modalProduit'></div>
+    <div class='auto-block' id='modalAuto'></div>
+    <label>Labels persos (séparés par virgule)</label>
+    <input id='modalLabels' type='text' placeholder='ex: favori, à tester, best-deal-pro'>
+    <label>Note libre</label>
+    <textarea id='modalNote' placeholder='Goût, observations, …'></textarea>
+    <div class='actions'>
+      <button class='danger' onclick='resetProductEdit()'>Réinitialiser</button>
+      <button onclick='closeEditModal()'>Annuler</button>
+      <button class='primary' onclick='saveEdit()'>Enregistrer</button>
+    </div>
+  </div>
+</div>
+<script>
+const RAW = [{"date": "2026-06-05", "produit": "Impact Whey Protein", "taille": "250g", "type": "whey", "prix": 13.29, "pxkg": 53.16, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/", "pxkgProt": 73.83, "cout30": 2.215, "prot": 72, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 73.83, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Concentré de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants : lécithine de Soja, lécithine de tournesol), arôme, édulcorant (sucralose). Les allergènes apparaissent en gras dans la liste des ingrédients. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Protein", "taille": "345g", "type": "whey", "prix": 15.99, "pxkg": 46.35, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/", "pxkgProt": 64.38, "cout30": 1.931, "prot": 72, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 64.38, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Concentré de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants : lécithine de Soja, lécithine de tournesol), arôme, édulcorant (sucralose). Les allergènes apparaissent en gras dans la liste des ingrédients. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Protein", "taille": "500g", "type": "whey", "prix": 20.99, "pxkg": 41.98, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/", "pxkgProt": 58.31, "cout30": 1.749, "prot": 72, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 58.31, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Concentré de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants : lécithine de Soja, lécithine de tournesol), arôme, édulcorant (sucralose). Les allergènes apparaissent en gras dans la liste des ingrédients. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Protein", "taille": "750g", "type": "whey", "prix": 29.99, "pxkg": 39.99, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/", "pxkgProt": 55.54, "cout30": 1.666, "prot": 72, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 55.54, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Concentré de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants : lécithine de Soja, lécithine de tournesol), arôme, édulcorant (sucralose). Les allergènes apparaissent en gras dans la liste des ingrédients. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Protein", "taille": "1kg", "type": "whey", "prix": 36.49, "pxkg": 36.49, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/", "pxkgProt": 50.68, "cout30": 1.52, "prot": 72, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 50.68, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Concentré de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants : lécithine de Soja, lécithine de tournesol), arôme, édulcorant (sucralose). Les allergènes apparaissent en gras dans la liste des ingrédients. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": false}, {"date": "2026-06-05", "produit": "Impact Whey Protein", "taille": "2.1kg", "type": "whey", "prix": 80.99, "pxkg": 39.13, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/", "pxkgProt": 54.35, "cout30": 1.631, "prot": 72, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 54.35, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Concentré de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants : lécithine de Soja, lécithine de tournesol), arôme, édulcorant (sucralose). Les allergènes apparaissent en gras dans la liste des ingrédients. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Protein", "taille": "3.6kg", "type": "whey", "prix": 130.99, "pxkg": 36.39, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/", "pxkgProt": 50.54, "cout30": 1.516, "prot": 72, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 50.54, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Concentré de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants : lécithine de Soja, lécithine de tournesol), arôme, édulcorant (sucralose). Les allergènes apparaissent en gras dans la liste des ingrédients. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Isolate", "taille": "390g", "type": "whey", "prix": 34.99, "pxkg": 89.72, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/", "pxkgProt": 109.41, "cout30": 3.282, "prot": 82, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 109.41, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Arôme, Édulcorant (Sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Isolate", "taille": "600g", "type": "whey", "prix": 68.99, "pxkg": 114.98, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/", "pxkgProt": 140.22, "cout30": 4.207, "prot": 82, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 140.22, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Arôme, Édulcorant (Sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Isolate", "taille": "780g", "type": "whey", "prix": 55.99, "pxkg": 71.78, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/", "pxkgProt": 87.54, "cout30": 2.626, "prot": 82, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 87.54, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Arôme, Édulcorant (Sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Isolate", "taille": "1kg", "type": "whey", "prix": 65.99, "pxkg": 65.99, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/", "pxkgProt": 80.48, "cout30": 2.414, "prot": 82, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 80.48, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Arôme, Édulcorant (Sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Isolate", "taille": "2.4kg", "type": "whey", "prix": 155.99, "pxkg": 64.19, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/", "pxkgProt": 78.28, "cout30": 2.348, "prot": 82, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 78.28, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Arôme, Édulcorant (Sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Isolate", "taille": "2.5kg", "type": "whey", "prix": 132.99, "pxkg": 53.2, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/", "pxkgProt": 64.88, "cout30": 1.946, "prot": 82, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 64.88, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Arôme, Édulcorant (Sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Whey Isolate", "taille": "4.2kg", "type": "whey", "prix": 249.99, "pxkg": 59.52, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/", "pxkgProt": 72.59, "cout30": 2.178, "prot": 82, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 72.59, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum (Lait) (96 %) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Arôme, Édulcorant (Sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Clear Whey Isolate", "taille": "420g", "type": "whey", "prix": 27.99, "pxkg": 66.64, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/clear-whey-isolate/12081395/", "pxkgProt": 84.35, "cout30": 2.53, "prot": 79, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 84.35, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["hydrolysat", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum hydrolysé (Lait) (93 %) (contient un agent antimousse (dioxyde de silicium), huile de colza), arômes naturels, acidifiant (acide citrique), colorant (rouge de betterave), édulcorant (sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Clear Whey Isolate", "taille": "500g", "type": "whey", "prix": 25.99, "pxkg": 51.98, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/clear-whey-isolate/12081395/", "pxkgProt": 65.8, "cout30": 1.974, "prot": 79, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 65.8, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["hydrolysat", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum hydrolysé (Lait) (93 %) (contient un agent antimousse (dioxyde de silicium), huile de colza), arômes naturels, acidifiant (acide citrique), colorant (rouge de betterave), édulcorant (sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Clear Whey Isolate", "taille": "875g", "type": "whey", "prix": 49.99, "pxkg": 57.13, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/clear-whey-isolate/12081395/", "pxkgProt": 72.32, "cout30": 2.17, "prot": 79, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 72.32, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["hydrolysat", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum hydrolysé (Lait) (93 %) (contient un agent antimousse (dioxyde de silicium), huile de colza), arômes naturels, acidifiant (acide citrique), colorant (rouge de betterave), édulcorant (sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Clear Whey Isolate", "taille": "1kg", "type": "whey", "prix": 46.99, "pxkg": 46.99, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/clear-whey-isolate/12081395/", "pxkgProt": 59.48, "cout30": 1.784, "prot": 79, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 59.48, "isDeal": false, "histLen": 2, "categorie": "Whey", "sweeteners": ["sucralose"], "wheyTypes": ["hydrolysat", "isolat"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Isolat de protéines de lactosérum hydrolysé (Lait) (93 %) (contient un agent antimousse (dioxyde de silicium), huile de colza), arômes naturels, acidifiant (acide citrique), colorant (rouge de betterave), édulcorant (sucralose). Pour les allergènes, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Diet Whey", "taille": "420g", "type": "whey", "prix": 15.49, "pxkg": 36.88, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-diet-whey/10530657/", "pxkgProt": 62.51, "cout30": 1.875, "prot": 59, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 62.51, "isDeal": false, "histLen": 2, "categorie": "Aliments enrichis", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre", "isolat", "enzyme"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Mélange de protéines (76 %) (Concentré de protéines de lactosérum (Lait) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Lait Concentré de protéines de lait, Isolat de protéines de lactosérum (Lait) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol))), Farine d'Avoine (8 %), Inuline (8 %), Arôme,L-Glutamine, Poudre de graines de lin (2 %), Préparation CLA (Triglycéride d'acide linoléique conjugué (Huile de carthame), Solides de sirop de maïs, Protéines de Lait, Stabilisant (Phosphate dipotassique), Anti-agglomérant (Dioxyde de silicium), Antioxydant (Tocophérols mixtes)), Extrait de thé vert (Camellia sinensis), Bitartrate de choline, Épaississant (Gomme xanthane), Édulcorant (Sucralose), Complexe enzymatique DigeZyme™ (0,1 %) (Alpha-amylase, Lactase, Cellulase, Protéase, Lipase). Pour les allergènes, y compris les céréales contenant du gluten, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Diet Whey", "taille": "1kg", "type": "whey", "prix": 32.19, "pxkg": 32.19, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-diet-whey/10530657/", "pxkgProt": 54.56, "cout30": 1.637, "prot": 59, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 54.56, "isDeal": false, "histLen": 2, "categorie": "Aliments enrichis", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre", "isolat", "enzyme"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Mélange de protéines (76 %) (Concentré de protéines de lactosérum (Lait) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Lait Concentré de protéines de lait, Isolat de protéines de lactosérum (Lait) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol))), Farine d'Avoine (8 %), Inuline (8 %), Arôme,L-Glutamine, Poudre de graines de lin (2 %), Préparation CLA (Triglycéride d'acide linoléique conjugué (Huile de carthame), Solides de sirop de maïs, Protéines de Lait, Stabilisant (Phosphate dipotassique), Anti-agglomérant (Dioxyde de silicium), Antioxydant (Tocophérols mixtes)), Extrait de thé vert (Camellia sinensis), Bitartrate de choline, Épaississant (Gomme xanthane), Édulcorant (Sucralose), Complexe enzymatique DigeZyme™ (0,1 %) (Alpha-amylase, Lactase, Cellulase, Protéase, Lipase). Pour les allergènes, y compris les céréales contenant du gluten, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Diet Whey", "taille": "2.5kg", "type": "whey", "prix": 71.99, "pxkg": 28.8, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-diet-whey/10530657/", "pxkgProt": 48.81, "cout30": 1.464, "prot": 59, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 48.81, "isDeal": false, "histLen": 2, "categorie": "Aliments enrichis", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre", "isolat", "enzyme"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Mélange de protéines (76 %) (Concentré de protéines de lactosérum (Lait) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Lait Concentré de protéines de lait, Isolat de protéines de lactosérum (Lait) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol))), Farine d'Avoine (8 %), Inuline (8 %), Arôme,L-Glutamine, Poudre de graines de lin (2 %), Préparation CLA (Triglycéride d'acide linoléique conjugué (Huile de carthame), Solides de sirop de maïs, Protéines de Lait, Stabilisant (Phosphate dipotassique), Anti-agglomérant (Dioxyde de silicium), Antioxydant (Tocophérols mixtes)), Extrait de thé vert (Camellia sinensis), Bitartrate de choline, Épaississant (Gomme xanthane), Édulcorant (Sucralose), Complexe enzymatique DigeZyme™ (0,1 %) (Alpha-amylase, Lactase, Cellulase, Protéase, Lipase). Pour les allergènes, y compris les céréales contenant du gluten, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Impact Diet Whey", "taille": "5kg", "type": "whey", "prix": 136.99, "pxkg": 27.4, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/impact-diet-whey/10530657/", "pxkgProt": 46.44, "cout30": 1.393, "prot": 59, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": 46.44, "isDeal": false, "histLen": 2, "categorie": "Aliments enrichis", "sweeteners": ["sucralose"], "wheyTypes": ["vegetal", "concentre", "isolat", "enzyme"], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Mélange de protéines (76 %) (Concentré de protéines de lactosérum (Lait) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol)), Lait Concentré de protéines de lait, Isolat de protéines de lactosérum (Lait) (contient des émulsifiants (Lécithine de Soja, Lécithine de tournesol))), Farine d'Avoine (8 %), Inuline (8 %), Arôme,L-Glutamine, Poudre de graines de lin (2 %), Préparation CLA (Triglycéride d'acide linoléique conjugué (Huile de carthame), Solides de sirop de maïs, Protéines de Lait, Stabilisant (Phosphate dipotassique), Anti-agglomérant (Dioxyde de silicium), Antioxydant (Tocophérols mixtes)), Extrait de thé vert (Camellia sinensis), Bitartrate de choline, Épaississant (Gomme xanthane), Édulcorant (Sucralose), Complexe enzymatique DigeZyme™ (0,1 %) (Alpha-amylase, Lactase, Cellulase, Protéase, Lipase). Pour les allergènes, y compris les céréales contenant du gluten, voir les ingrédients en gras. Convient aux végétariens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Créatine Monohydrate en poudre", "taille": "100g", "type": "creatine", "prix": 7.99, "pxkg": 79.9, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/creatine-monohydrate-en-poudre/10530050/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": 79.9, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Créatine", "sweeteners": [], "wheyTypes": [], "typeTags": ["monohydrate"], "ingredients": "Ingrédients          Ingrédients :  Créatine monohydrate. Produit dans une usine qui traite également du lait. Convient aux végétariens et aux végétaliens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Créatine Monohydrate en poudre", "taille": "250g", "type": "creatine", "prix": 14.99, "pxkg": 59.96, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/creatine-monohydrate-en-poudre/10530050/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": 59.96, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Créatine", "sweeteners": [], "wheyTypes": [], "typeTags": ["monohydrate"], "ingredients": "Ingrédients          Ingrédients :  Créatine monohydrate. Produit dans une usine qui traite également du lait. Convient aux végétariens et aux végétaliens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Créatine Monohydrate en poudre", "taille": "500g", "type": "creatine", "prix": 24.99, "pxkg": 49.98, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/creatine-monohydrate-en-poudre/10530050/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": 49.98, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Créatine", "sweeteners": [], "wheyTypes": [], "typeTags": ["monohydrate"], "ingredients": "Ingrédients          Ingrédients :  Créatine monohydrate. Produit dans une usine qui traite également du lait. Convient aux végétariens et aux végétaliens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Créatine Monohydrate en poudre", "taille": "1kg", "type": "creatine", "prix": 45.99, "pxkg": 45.99, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/creatine-monohydrate-en-poudre/10530050/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": 45.99, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Créatine", "sweeteners": [], "wheyTypes": [], "typeTags": ["monohydrate"], "ingredients": "Ingrédients          Ingrédients :  Créatine monohydrate. Produit dans une usine qui traite également du lait. Convient aux végétariens et aux végétaliens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "THE Creatine Creapure®", "taille": "250g", "type": "creatine", "prix": 28.99, "pxkg": 115.96, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/the-creatine-creapure/10529740/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": 115.96, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Créatine", "sweeteners": [], "wheyTypes": [], "typeTags": ["creapure", "monohydrate"], "ingredients": "Ingrédients          Ingrédients :  Creapure® (Monohydrate de Créatine). Produit dans une usine qui traite également du lait. Convient aux végétariens et aux végétaliens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "THE Creatine Creapure®", "taille": "500g", "type": "creatine", "prix": 42.99, "pxkg": 85.98, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/the-creatine-creapure/10529740/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": 85.98, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Créatine", "sweeteners": [], "wheyTypes": [], "typeTags": ["creapure", "monohydrate"], "ingredients": "Ingrédients          Ingrédients :  Creapure® (Monohydrate de Créatine). Produit dans une usine qui traite également du lait. Convient aux végétariens et aux végétaliens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": false}, {"date": "2026-06-05", "produit": "THE Creatine Creapure®", "taille": "1kg", "type": "creatine", "prix": 83.99, "pxkg": 83.99, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/the-creatine-creapure/10529740/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": null, "dha": null, "coutGOmega": null, "gEpaDhaPack": null, "creaDose": null, "coutKgCrea": 83.99, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Créatine", "sweeteners": [], "wheyTypes": [], "typeTags": ["creapure", "monohydrate"], "ingredients": "Ingrédients          Ingrédients :  Creapure® (Monohydrate de Créatine). Produit dans une usine qui traite également du lait. Convient aux végétariens et aux végétaliens.", "labels": [], "note": "", "hasIngredients": true, "en_stock": false}, {"date": "2026-06-05", "produit": "Oméga 3 en gélules", "taille": "90 gélules", "type": "omega3", "prix": 8.99, "pxkg": 99.89, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/omega-3-en-gelules/10529329/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": 180, "dha": 120, "coutGOmega": 0.333, "gEpaDhaPack": 27.0, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Oméga-3", "sweeteners": [], "wheyTypes": [], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Huile de Poisson Oméga 3, Enveloppe de capsule molle (Gélatine de bœuf, Humectant (Glycérol)), Antioxydant (D-Alpha-Tocophérol), Huile de Soja raffinée. Peut contenir du Lait. Pour les allergènes, voir les ingrédients en gras.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Oméga 3 en gélules", "taille": "250 gélules", "type": "omega3", "prix": 21.49, "pxkg": 85.96, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/omega-3-en-gelules/10529329/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": 180, "dha": 120, "coutGOmega": 0.287, "gEpaDhaPack": 75.0, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Oméga-3", "sweeteners": [], "wheyTypes": [], "typeTags": [], "ingredients": "Ingrédients          Ingrédients :  Huile de Poisson Oméga 3, Enveloppe de capsule molle (Gélatine de bœuf, Humectant (Glycérol)), Antioxydant (D-Alpha-Tocophérol), Huile de Soja raffinée. Peut contenir du Lait. Pour les allergènes, voir les ingrédients en gras.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Omégas 3 végans", "taille": "30 gélules", "type": "omega3", "prix": 8.99, "pxkg": 299.67, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/omegas-3-vegans/13633515/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": null, "dha": 200, "coutGOmega": null, "gEpaDhaPack": 6.0, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Oméga-3", "sweeteners": [], "wheyTypes": [], "typeTags": [], "ingredients": "Ingrédients          Acide docosahexaénoïque (DHA) d’huile d’algue, enrobage de la gélule (humectant [glycérine], excipient [amidon de maïs modifié], agent gélifiant [carraghénane], eau purifiée), vitamine E.\nALLERGÈNES : produit dans des locaux utilisant également du lait.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}, {"date": "2026-06-05", "produit": "Omégas 3 végans", "taille": "90 gélules", "type": "omega3", "prix": 20.99, "pxkg": 233.22, "cout": null, "portions": null, "ddm": "", "url": "https://fr.myprotein.com/p/nutrition-sportive/omegas-3-vegans/13633515/", "pxkgProt": null, "cout30": null, "prot": null, "cout3leu": null, "epa": null, "dha": 200, "coutGOmega": null, "gEpaDhaPack": 18.0, "creaDose": null, "coutKgCrea": null, "avgPxkgProt": null, "isDeal": false, "histLen": 2, "categorie": "Oméga-3", "sweeteners": [], "wheyTypes": [], "typeTags": [], "ingredients": "Ingrédients          Acide docosahexaénoïque (DHA) d’huile d’algue, enrobage de la gélule (humectant [glycérine], excipient [amidon de maïs modifié], agent gélifiant [carraghénane], eau purifiée), vitamine E.\nALLERGÈNES : produit dans des locaux utilisant également du lait.", "labels": [], "note": "", "hasIngredients": true, "en_stock": true}];
+const HISTORY = [{"produit": "Impact Whey Protein", "taille": "250g", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 13.29, "pxkg": 53.16, "pxkgProt": 73.83, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 13.29, "pxkg": 53.16, "pxkgProt": 73.83, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Protein", "taille": "345g", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 15.99, "pxkg": 46.35, "pxkgProt": 64.38, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 15.99, "pxkg": 46.35, "pxkgProt": 64.38, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Protein", "taille": "500g", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 20.99, "pxkg": 41.98, "pxkgProt": 58.31, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 20.99, "pxkg": 41.98, "pxkgProt": 58.31, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Protein", "taille": "750g", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 29.99, "pxkg": 39.99, "pxkgProt": 55.54, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 29.99, "pxkg": 39.99, "pxkgProt": 55.54, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Protein", "taille": "1kg", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 36.49, "pxkg": 36.49, "pxkgProt": 50.68, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 36.49, "pxkg": 36.49, "pxkgProt": 50.68, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Protein", "taille": "2.1kg", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 80.99, "pxkg": 39.13, "pxkgProt": 54.35, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 80.99, "pxkg": 39.13, "pxkgProt": 54.35, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Protein", "taille": "3.6kg", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 130.99, "pxkg": 36.39, "pxkgProt": 50.54, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 130.99, "pxkg": 36.39, "pxkgProt": 50.54, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Isolate", "taille": "390g", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 34.99, "pxkg": 89.72, "pxkgProt": 109.41, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 34.99, "pxkg": 89.72, "pxkgProt": 109.41, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Isolate", "taille": "600g", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 68.99, "pxkg": 114.98, "pxkgProt": 140.22, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 68.99, "pxkg": 114.98, "pxkgProt": 140.22, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Isolate", "taille": "780g", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 55.99, "pxkg": 71.78, "pxkgProt": 87.54, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 55.99, "pxkg": 71.78, "pxkgProt": 87.54, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Isolate", "taille": "1kg", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 65.99, "pxkg": 65.99, "pxkgProt": 80.48, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 65.99, "pxkg": 65.99, "pxkgProt": 80.48, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Isolate", "taille": "2.4kg", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 155.99, "pxkg": 64.19, "pxkgProt": 78.28, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 155.99, "pxkg": 64.19, "pxkgProt": 78.28, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Isolate", "taille": "2.5kg", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 132.99, "pxkg": 53.2, "pxkgProt": 64.88, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 132.99, "pxkg": 53.2, "pxkgProt": 64.88, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Whey Isolate", "taille": "4.2kg", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 249.99, "pxkg": 59.52, "pxkgProt": 72.59, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 249.99, "pxkg": 59.52, "pxkgProt": 72.59, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Clear Whey Isolate", "taille": "420g", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 27.99, "pxkg": 66.64, "pxkgProt": 84.35, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 27.99, "pxkg": 66.64, "pxkgProt": 84.35, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Clear Whey Isolate", "taille": "500g", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 25.99, "pxkg": 51.98, "pxkgProt": 65.8, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 25.99, "pxkg": 51.98, "pxkgProt": 65.8, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Clear Whey Isolate", "taille": "875g", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 49.99, "pxkg": 57.13, "pxkgProt": 72.32, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 49.99, "pxkg": 57.13, "pxkgProt": 72.32, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Clear Whey Isolate", "taille": "1kg", "categorie": "Whey", "type": "whey", "points": [{"date": "2026-06-04", "prix": 46.99, "pxkg": 46.99, "pxkgProt": 59.48, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 46.99, "pxkg": 46.99, "pxkgProt": 59.48, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Diet Whey", "taille": "420g", "categorie": "Aliments enrichis", "type": "whey", "points": [{"date": "2026-06-04", "prix": 15.49, "pxkg": 36.88, "pxkgProt": 62.51, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 15.49, "pxkg": 36.88, "pxkgProt": 62.51, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Diet Whey", "taille": "1kg", "categorie": "Aliments enrichis", "type": "whey", "points": [{"date": "2026-06-04", "prix": 32.19, "pxkg": 32.19, "pxkgProt": 54.56, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 32.19, "pxkg": 32.19, "pxkgProt": 54.56, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Diet Whey", "taille": "2.5kg", "categorie": "Aliments enrichis", "type": "whey", "points": [{"date": "2026-06-04", "prix": 71.99, "pxkg": 28.8, "pxkgProt": 48.81, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 71.99, "pxkg": 28.8, "pxkgProt": 48.81, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Impact Diet Whey", "taille": "5kg", "categorie": "Aliments enrichis", "type": "whey", "points": [{"date": "2026-06-04", "prix": 136.99, "pxkg": 27.4, "pxkgProt": 46.44, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 136.99, "pxkg": 27.4, "pxkgProt": 46.44, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Créatine Monohydrate en poudre", "taille": "100g", "categorie": "Créatine", "type": "creatine", "points": [{"date": "2026-06-04", "prix": 7.99, "pxkg": 79.9, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 79.9}, {"date": "2026-06-05", "prix": 7.99, "pxkg": 79.9, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 79.9}]}, {"produit": "Créatine Monohydrate en poudre", "taille": "250g", "categorie": "Créatine", "type": "creatine", "points": [{"date": "2026-06-04", "prix": 14.99, "pxkg": 59.96, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 59.96}, {"date": "2026-06-05", "prix": 14.99, "pxkg": 59.96, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 59.96}]}, {"produit": "Créatine Monohydrate en poudre", "taille": "500g", "categorie": "Créatine", "type": "creatine", "points": [{"date": "2026-06-04", "prix": 24.99, "pxkg": 49.98, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 49.98}, {"date": "2026-06-05", "prix": 24.99, "pxkg": 49.98, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 49.98}]}, {"produit": "Créatine Monohydrate en poudre", "taille": "1kg", "categorie": "Créatine", "type": "creatine", "points": [{"date": "2026-06-04", "prix": 45.99, "pxkg": 45.99, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 45.99}, {"date": "2026-06-05", "prix": 45.99, "pxkg": 45.99, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 45.99}]}, {"produit": "THE Creatine Creapure®", "taille": "250g", "categorie": "Créatine", "type": "creatine", "points": [{"date": "2026-06-04", "prix": 28.99, "pxkg": 115.96, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 115.96}, {"date": "2026-06-05", "prix": 28.99, "pxkg": 115.96, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 115.96}]}, {"produit": "THE Creatine Creapure®", "taille": "500g", "categorie": "Créatine", "type": "creatine", "points": [{"date": "2026-06-04", "prix": 42.99, "pxkg": 85.98, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 85.98}, {"date": "2026-06-05", "prix": 42.99, "pxkg": 85.98, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 85.98}]}, {"produit": "THE Creatine Creapure®", "taille": "1kg", "categorie": "Créatine", "type": "creatine", "points": [{"date": "2026-06-04", "prix": 83.99, "pxkg": 83.99, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 83.99}, {"date": "2026-06-05", "prix": 83.99, "pxkg": 83.99, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": 83.99}]}, {"produit": "Oméga 3 en gélules", "taille": "90 gélules", "categorie": "Oméga-3", "type": "omega3", "points": [{"date": "2026-06-04", "prix": 8.99, "pxkg": 99.89, "pxkgProt": null, "cout3leu": null, "coutGOmega": 0.333, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 8.99, "pxkg": 99.89, "pxkgProt": null, "cout3leu": null, "coutGOmega": 0.333, "coutKgCrea": null}]}, {"produit": "Oméga 3 en gélules", "taille": "250 gélules", "categorie": "Oméga-3", "type": "omega3", "points": [{"date": "2026-06-04", "prix": 21.49, "pxkg": 85.96, "pxkgProt": null, "cout3leu": null, "coutGOmega": 0.287, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 21.49, "pxkg": 85.96, "pxkgProt": null, "cout3leu": null, "coutGOmega": 0.287, "coutKgCrea": null}]}, {"produit": "Omégas 3 végans", "taille": "30 gélules", "categorie": "Oméga-3", "type": "omega3", "points": [{"date": "2026-06-04", "prix": 8.99, "pxkg": 299.67, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 8.99, "pxkg": 299.67, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}, {"produit": "Omégas 3 végans", "taille": "90 gélules", "categorie": "Oméga-3", "type": "omega3", "points": [{"date": "2026-06-04", "prix": 20.99, "pxkg": 233.22, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}, {"date": "2026-06-05", "prix": 20.99, "pxkg": 233.22, "pxkgProt": null, "cout3leu": null, "coutGOmega": null, "coutKgCrea": null}]}];
+const SWEETENER_LABELS = {"sucralose": "Sucralose", "stevia": "Stévia", "acesulfame_k": "Acésulfame-K", "aspartame": "Aspartame", "sans_edulcorant": "Sans édulcorant"};
+const WHEY_TYPE_LABELS = {"isolat_cfm": "Isolat CFM (filtration à froid)", "hydrolysat": "Hydrolysat", "isolat": "Isolat", "concentre": "Concentré", "native": "Native (lait cru)", "caseine": "Caséine", "vegetal": "Végétal", "mix": "Mix protéines", "enzyme": "Enzymes digestives"};
+const OMEGA3_TYPE_LABELS = {"form_tg": "Triglycéride (TG)", "form_ee": "Ester éthylique (EE)", "ifos": "IFOS certifié"};
+const CREATINE_TYPE_LABELS = {"creapure": "Creapure®", "monohydrate": "Monohydrate", "mesh_100": "100 mesh", "mesh_200": "200 mesh", "mesh_500": "500 mesh (ultra-fine)"};
+const TYPE_TAB_LABEL = { whey:'Whey & protéines', omega3:'Oméga-3', creatine:'Créatine', global:'Global' };
+const TYPE_BADGE_LABEL = { whey:'Whey', omega3:'Oméga-3', creatine:'Créatine' };
+// Colonnes du tableau par type de produit
+const TAB_COLS = {
+  whey: [
+    {k:'produit',l:'Produit',w:'26%',wide:true},
+    {k:'taille',l:'Taille',w:'7%'},
+    {k:'prix',l:'Prix',w:'7%',num:true,d:2},
+    {k:'prot',l:'%Prot',w:'6%',num:true,fmt:'pct'},
+    {k:'pxkgProt',l:'EUR/kg prot',w:'11%',num:true,d:2,best:true},
+    {k:'cout30',l:'EUR/30g prot',w:'11%',num:true,d:3,best:true},
+    {k:'cout3leu',l:'EUR/3g leu',w:'11%',num:true,d:3,best:true,title:'Coût pour 3g de leucine (seuil anabolique)'},
+    {k:'pxkg',l:'EUR/kg',w:'8%',num:true,d:2},
+    {k:'cout',l:'EUR/portion',w:'8%',num:true,d:2},
+    {k:'date',l:'Date',w:'5%',num:true,fmt:'date'},
+  ],
+  omega3: [
+    {k:'produit',l:'Produit',w:'30%',wide:true},
+    {k:'taille',l:'Format',w:'10%'},
+    {k:'prix',l:'Prix',w:'8%',num:true,d:2},
+    {k:'epa',l:'EPA mg/cap',w:'10%',num:true,fmt:'int'},
+    {k:'dha',l:'DHA mg/cap',w:'10%',num:true,fmt:'int'},
+    {k:'coutGOmega',l:'EUR/g EPA+DHA',w:'14%',num:true,d:3,best:true},
+    {k:'gEpaDhaPack',l:'g EPA+DHA / pack',w:'12%',num:true,d:1,suf:' g',title:'Quantité totale d\'EPA+DHA dans le pack (capsules × (EPA+DHA mg/cap) / 1000)'},
+    {k:'date',l:'Date',w:'8%',num:true,fmt:'date'},
+  ],
+  creatine: [
+    {k:'produit',l:'Produit',w:'40%',wide:true},
+    {k:'taille',l:'Taille',w:'10%'},
+    {k:'prix',l:'Prix',w:'10%',num:true,d:2},
+    {k:'creaDose',l:'g/dose',w:'10%',num:true,fmt:'int'},
+    {k:'coutKgCrea',l:'EUR/kg créatine',w:'15%',num:true,d:2,best:true},
+    {k:'pxkg',l:'EUR/kg',w:'10%',num:true,d:2},
+    {k:'date',l:'Date',w:'10%',num:true,fmt:'date'},
+  ],
+  global: [
+    {k:'produit',l:'Produit',w:'28%',wide:true},
+    {k:'type',l:'Type',w:'9%',fmt:'typeBadge'},
+    {k:'taille',l:'Taille',w:'9%'},
+    {k:'prix',l:'Prix',w:'8%',num:true,d:2},
+    {k:'pxkg',l:'EUR/kg',w:'9%',num:true,d:2},
+    {k:'pxkgProt',l:'EUR/kg prot',w:'10%',num:true,d:2,title:'Whey uniquement'},
+    {k:'coutGOmega',l:'EUR/g E+D',w:'10%',num:true,d:3,title:'Oméga-3 uniquement'},
+    {k:'coutKgCrea',l:'EUR/kg créa',w:'9%',num:true,d:2,title:'Créatine uniquement'},
+    {k:'date',l:'Date',w:'8%',num:true,fmt:'date'},
+  ],
+};
+// Métrique principale par tab : sort key par défaut + chart key + label
+const TAB_PRIMARY = {
+  whey:     {sort:'pxkgProt', key:'pxkg',       label:'Prix au kilo de produit (EUR/kg)'},
+  omega3:   {sort:'coutGOmega', key:'coutGOmega', label:'Coût pour 1g d\'EPA+DHA (EUR)'},
+  creatine: {sort:'coutKgCrea', key:'coutKgCrea', label:'Coût au kilo de créatine (EUR/kg)'},
+  global:   {sort:'produit',   key:'prix',        label:'Prix nominal (EUR)'},
+};
+// Métrique utilisée pour le graphique de tendance par tab.
+//   trendKey  : champ lu dans HISTORY[].points[]
+//   trendDecs : nombre de décimales
+//   trendUnit : suffixe d'axe / tooltip
+//   trendTitle: titre affiché au-dessus du chart
+const TREND_META = {
+  whey:     {key:'pxkgProt',   decs:2, unit:' EUR', title:'Évolution dans le temps (EUR/kg protéine)'},
+  omega3:   {key:'coutGOmega', decs:3, unit:' EUR', title:'Évolution dans le temps (EUR/g EPA+DHA)'},
+  creatine: {key:'coutKgCrea', decs:2, unit:' EUR', title:'Évolution dans le temps (EUR/kg créatine)'},
+  global:   {key:'prix',       decs:2, unit:' EUR', title:'Évolution dans le temps (prix nominal)'},
+};
+const COLORS = {'500g':'#378ADD','750g':'#1D9E75','2Kg':'#7F77DD','Unique':'#D85A30'};
+const TREND_COLORS = ['#378ADD','#1D9E75','#E84040','#F5A623','#7F77DD','#00BCD4','#FF6B35','#8BC34A'];
+const CAT_ORDER = ['Whey','Aliments enrichis','Autres'];
+// Catégories whey uniquement (Oméga-3 / Créatine ne doivent PAS apparaître
+// dans le filtre Catégorie qui n'est visible que sur le tab whey).
+const CATEGORIES = CAT_ORDER.filter(c=>RAW.some(r=>(r.type||'whey')==='whey' && r.categorie===c));
+const PRODUCTS = [...new Set(RAW.map(r=>r.produit))];
+const SIZES = [...new Set(RAW.map(r=>r.taille))];
+const SWEETENERS = Object.keys(SWEETENER_LABELS).filter(k=>RAW.some(r=>(r.sweeteners||[]).includes(k)));
+const WHEY_TYPES = Object.keys(WHEY_TYPE_LABELS).filter(k=>RAW.some(r=>(r.wheyTypes||[]).includes(k)));
+const STORAGE_KEY = 'hsn_tracker_local_tags_v1';
+// Tags chargés depuis tags.json (server-side) + localStorage (édits locaux)
+const SERVER_TAGS = {};
+RAW.forEach(r=>{ if(r.labels && r.labels.length || (r.note||'').length){ SERVER_TAGS[r.produit] = {labels:[...r.labels], note:r.note}; }});
+function loadLocalTags(){ try { return JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}'); } catch(e){ return {}; } }
+function saveLocalTags(t){ localStorage.setItem(STORAGE_KEY, JSON.stringify(t)); }
+let LOCAL_TAGS = loadLocalTags();
+function effectiveTags(produit){
+  const local = LOCAL_TAGS[produit];
+  if(local) return local;
+  return SERVER_TAGS[produit] || {labels:[], note:''};
+}
+let currentSize = 'all';
+let currentCategory = 'Whey';
+let currentTab = 'whey';
+let selectedSweeteners = new Set();
+let selectedWheyTypes = new Set();
+let selectedLabels = new Set();
+let selectedTypeTags = new Set();
+let swLogic = 'OR', wtLogic = 'OR', lblLogic = 'OR', ttLogic = 'OR';
+let searchQuery = '';
+let sortKey = 'pxkgProt', sortAsc = true;
+let chartPxkgProt, chartCout30, chartPxkg, chartTrend, chartTrendPrice;
+let selectedTrendIndices = [];
+// trendRangeMode : 'all' | '7d' | '30d' | '90d' | '1y' | 'custom'
+// Quand un chip est cliqué → calcule la fenêtre depuis aujourd'hui et la pousse dans le slider.
+// Quand le slider est draggé → bascule en 'custom' (les chips se désactivent).
+let trendRangeMode = 'all';
+let trendSliderIdxMin = 0, trendSliderIdxMax = 0;
+// Toutes les dates connues (union, croissant) — calculée depuis HISTORY car RAW
+// ne contient que le dernier snapshot par variant (pas l'historique complet).
+const TREND_ALL_DATES = [...new Set(HISTORY.flatMap(h=>h.points.map(p=>p.date)).filter(Boolean))].sort();
+const TREND_RANGE_PRESETS = [
+  {k:'7d',  l:'7j',  days:7},
+  {k:'30d', l:'30j', days:30},
+  {k:'90d', l:'90j', days:90},
+  {k:'1y',  l:'1A',  days:365},
+  {k:'all', l:'Tout',days:null},
+];
+let modalCurrent = null;
+function fmt(v,d=2,suf=' EUR'){return v!=null?Number(v).toFixed(d)+suf:'—';}
+function matchesGroup(values, selected, mode){
+  if(!selected.size) return true;
+  if(mode==='AND'){ for(const t of selected) if(!values.includes(t)) return false; return true; }
+  for(const t of selected) if(values.includes(t)) return true;
+  return false;
+}
+function getFiltered(){
+  let f = currentTab==='global' ? RAW.slice() : RAW.filter(r => (r.type||'whey') === currentTab);
+  if(currentTab==='whey' && currentCategory!=='all'){f=f.filter(r=>r.categorie===currentCategory);}
+  if(currentSize!=='all'){f=f.filter(r=>r.taille===currentSize);}
+  if(currentTab==='whey'){
+    f = f.filter(r => matchesGroup(r.sweeteners||[], selectedSweeteners, swLogic));
+    f = f.filter(r => matchesGroup(r.wheyTypes||[], selectedWheyTypes, wtLogic));
+  } else if(currentTab==='omega3' || currentTab==='creatine'){
+    f = f.filter(r => matchesGroup(r.typeTags||[], selectedTypeTags, ttLogic));
+  }
+  f = f.filter(r => matchesGroup(effectiveTags(r.produit).labels||[], selectedLabels, lblLogic));
+  if(searchQuery){const q=searchQuery.toLowerCase();f=f.filter(r=>r.produit.toLowerCase().includes(q)||(effectiveTags(r.produit).note||'').toLowerCase().includes(q));}
+  return f;
+}
+function shortName(p){return p.length>32?p.slice(0,30)+'…':p;}
+function getFilteredProducts(){return [...new Set(getFiltered().map(r=>r.produit))];}
+function buildDatasets(key){
+  const products=getFilteredProducts();
+  const sizes=currentSize==='all'?SIZES:[currentSize];
+  return sizes.map(sz=>({
+    label:sz,
+    data:products.map(pr=>{const r=RAW.find(x=>x.produit===pr&&x.taille===sz&&(currentCategory==='all'||x.categorie===currentCategory));return r?r[key]:null;}),
+    backgroundColor:COLORS[sz]||'#888',borderRadius:4,borderSkipped:false
+  }));
+}
+const COPTS=(unit=' EUR',d=2)=>({
+  responsive:true,maintainAspectRatio:false,
+  plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?Number(ctx.parsed.y).toFixed(d)+unit:'N/A'}`}}},
+  scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:35}},
+          y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},callback:v=>Number(v).toFixed(d)+unit},beginAtZero:false}}
+});
+function buildLegend(id){
+  const sizes=currentSize==='all'?SIZES:[currentSize];
+  document.getElementById(id).innerHTML=sizes.map(sz=>`<span><span class='legend-dot' style='background:${COLORS[sz]||"#888"}'></span>${sz}</span>`).join('');
+}
+function initCharts(){
+  const labels=getFilteredProducts().map(shortName);
+  chartPxkgProt=new Chart(document.getElementById('chartPxkgProt'),{type:'bar',data:{labels,datasets:buildDatasets('pxkgProt')},options:COPTS()});
+  chartCout30=new Chart(document.getElementById('chartCout30'),{type:'bar',data:{labels,datasets:buildDatasets('cout30')},options:COPTS(' EUR',3)});
+  chartPxkg=new Chart(document.getElementById('chartPxkg'),{type:'bar',data:{labels,datasets:buildDatasets('pxkg')},options:COPTS()});
+  buildLegend('legendPxkgProt');buildLegend('legendCout30');buildLegend('legendPxkg');
+}
+function updateCharts(){
+  const labels=getFilteredProducts().map(shortName);
+  if(currentTab==='whey'){
+    [[chartPxkgProt,'pxkgProt'],[chartCout30,'cout30'],[chartPxkg,'pxkg']].forEach(([c,k])=>{
+      c.data.labels=labels; c.data.datasets=buildDatasets(k); c.update();
+    });
+    document.getElementById('primaryChartTitle').textContent='Prix au kilo de produit (EUR/kg)';
+    buildLegend('legendPxkgProt');buildLegend('legendCout30');buildLegend('legendPxkg');
+  } else {
+    const prim=TAB_PRIMARY[currentTab];
+    document.getElementById('primaryChartTitle').textContent=prim.label;
+    chartPxkg.data.labels=labels;
+    chartPxkg.data.datasets=buildDatasets(prim.key);
+    chartPxkg.update();
+    buildLegend('legendPxkg');
+  }
+}
+function buildCategoryFilters(){
+  const cats=['all',...CATEGORIES];
+  document.getElementById('categoryFilters').innerHTML=cats.map(c=>`<button class='filter-btn ${c===currentCategory?"active":""}' onclick='filterCategory("${c}")'>${c==='all'?'Toutes catégories':c}</button>`).join('');
+}
+function filterCategory(c){currentCategory=c;buildCategoryFilters();updateCharts();updateTable();selectedTrendIndices=[];renderTrendChips();buildTrendSelect();buildTrendChart();}
+function compareValues(a,b,k){
+  const av=a[k], bv=b[k];
+  if(av==null && bv==null) return 0;
+  if(av==null) return 1;
+  if(bv==null) return -1;
+  if(typeof av === 'number' && typeof bv === 'number') return av-bv;
+  return String(av).localeCompare(String(bv));
+}
+function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function typeTagLabel(t){
+  return OMEGA3_TYPE_LABELS[t] || CREATINE_TYPE_LABELS[t] || t;
+}
+function renderChips(r){
+  const parts=[];
+  for(const t of (r.sweeteners||[])){
+    const cls=t==='sans_edulcorant'?'sweet none':'sweet';
+    parts.push(`<span class='tag-chip ${cls}'>${SWEETENER_LABELS[t]||t}</span>`);
+  }
+  for(const t of (r.wheyTypes||[])){
+    parts.push(`<span class='tag-chip whey'>${WHEY_TYPE_LABELS[t]||t}</span>`);
+  }
+  for(const t of (r.typeTags||[])){
+    parts.push(`<span class='tag-chip whey'>${escapeHtml(typeTagLabel(t))}</span>`);
+  }
+  const eff=effectiveTags(r.produit);
+  for(const lb of (eff.labels||[])){
+    parts.push(`<span class='tag-chip lbl'>${escapeHtml(lb)}</span>`);
+  }
+  return parts.join('');
+}
+function isMissingInfo(r){
+  // Manque de classification : pas d'ingrédients OU ni édulcorant ni type protéine détecté
+  if(!r.hasIngredients) return true;
+  return (!(r.sweeteners||[]).length) && (!(r.wheyTypes||[]).length);
+}
+function fmtCell(col, v){
+  if(v==null||v==='') return '—';
+  if(col.fmt==='pct') return Number(v).toFixed(0)+'%';
+  if(col.fmt==='int') return Number(v).toFixed(0);
+  if(col.fmt==='date') return v;
+  if(col.fmt==='typeBadge'){
+    const lbl = TYPE_BADGE_LABEL[v] || v;
+    const styles = {
+      whey:    'background:#EEF3FB;color:#2A5C9C;border:0.5px solid #C8D8EE',
+      omega3:  'background:#FFF6E0;color:#92580A;border:0.5px solid #F0DAA0',
+      creatine:'background:#EFEDFA;color:#4A40A8;border:0.5px solid #D4CEEA',
+    };
+    const st = styles[v] || 'background:#eee;color:#666;border:0.5px solid #ccc';
+    return `<span class='tag-chip' style='${st};font-size:10px;'>${escapeHtml(lbl)}</span>`;
+  }
+  if(col.num){
+    const suf = col.suf!=null ? col.suf : ' EUR';
+    return Number(v).toFixed(col.d!=null?col.d:2)+suf;
+  }
+  return String(v);
+}
+function renderTableHead(){
+  const cols=TAB_COLS[currentTab]||TAB_COLS.whey;
+  const html='<tr>'+cols.map(c=>{
+    const align=c.num?';text-align:right':'';
+    const t=c.title?` title='${escapeHtml(c.title)}'`:'';
+    return `<th class='sortable' data-key='${c.k}'${t} style='width:${c.w||"auto"}${align}'>${escapeHtml(c.l)}<span class='sort-arrow'>↕</span></th>`;
+  }).join('')+'</tr>';
+  document.getElementById('tableHead').innerHTML=html;
+  setupSort();
+  updateSortHeaders();
+}
+function updateTable(){
+  const cols=TAB_COLS[currentTab]||TAB_COLS.whey;
+  let f=getFiltered();
+  f=[...f].sort((a,b)=>{const c=compareValues(a,b,sortKey);return sortAsc?c:-c;});
+  // Calcule les meilleures valeurs (min) pour les colonnes avec best:true
+  const bestVals={};
+  for(const c of cols){ if(c.best){
+    const vals=f.filter(r=>r[c.k]!=null).map(r=>r[c.k]);
+    if(vals.length) bestVals[c.k]=Math.min(...vals);
+  }}
+  document.getElementById('rowCount').textContent=`${f.length} ligne(s)`;
+  if(f.length===0){
+    const colspan = cols.length;
+    const tabRows = RAW.filter(r=>(r.type||'whey')===currentTab);
+    const msg = tabRows.length===0
+      ? `Aucune donnée pour <b>${TYPE_TAB_LABEL[currentTab]}</b> dans l'Excel.<br>Lance <code>python hsn_tracker.py</code> pour scraper ${currentTab==='omega3'?'les oméga-3':currentTab==='creatine'?'les créatines':'les whey'}.`
+      : `Aucun produit ne correspond aux filtres actuels.`;
+    document.getElementById('tableBody').innerHTML = `<tr><td colspan='${colspan}' style='padding:30px;text-align:center;color:#888;font-size:13px'>${msg}</td></tr>`;
+    return;
+  }
+  document.getElementById('tableBody').innerHTML=f.map(r=>{
+    const dealBadge = r.isDeal ? `<span class='deal-badge' title='Sous la moyenne historique de plus de 5%'>🔥 DEAL</span>` : '';
+    const missing = (currentTab==='whey' && isMissingInfo(r)) ? `<span class='missing-pill' title='Pas (ou peu) d&apos;info détectée — clic ✏️ pour annoter'>❓ à classer</span>` : '';
+    const oosBadge = r.en_stock === false ? `<span class='oos-badge' title='Rupture de stock détectée au dernier scraping'>⚠️ Rupture</span>` : '';
+    const eff = effectiveTags(r.produit);
+    const noteLine = eff.note ? `<div class='note-line'>📝 ${escapeHtml(eff.note)}</div>` : '';
+    const editBtn = `<button class='edit-btn' title='Éditer tags &amp; note' onclick='openEditModal(${escapeHtml(JSON.stringify(r.produit))})'>✏️</button>`;
+    const cells = cols.map(c=>{
+      if(c.k==='produit'){
+        return `<td title='${escapeHtml(r.produit)}' style='white-space:normal;overflow:visible;'><a href='${r.url}' target='_blank'>${escapeHtml(r.produit)}</a>${editBtn}${dealBadge}${missing}${oosBadge}<div style='margin-top:3px;white-space:normal;'>${renderChips(r)}</div>${noteLine}</td>`;
+      }
+      const align = c.num ? 'text-align:right' : '';
+      const isBest = c.best && bestVals[c.k]!=null && r[c.k]===bestVals[c.k];
+      const cls = isBest ? 'best-cell' : '';
+      const dateStyle = c.fmt==='date' ? ';font-size:11px;color:#888' : '';
+      return `<td class='${cls}' style='${align}${dateStyle}'>${fmtCell(c, r[c.k])}</td>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  // Indicateur global "à classer" (whey uniquement)
+  if(currentTab==='whey'){
+    const missCount = RAW.filter(r=>(r.type||'whey')==='whey').filter(isMissingInfo).map(r=>r.produit);
+    const uniqMiss = [...new Set(missCount)].length;
+    document.getElementById('missingCount').textContent = uniqMiss>0 ? `❓ ${uniqMiss} produit(s) à classer` : '';
+  } else {
+    document.getElementById('missingCount').textContent = '';
+  }
+}
+function updateSortHeaders(){
+  document.querySelectorAll('th.sortable').forEach(th=>{
+    th.classList.remove('sort-asc','sort-desc');
+    if(th.dataset.key===sortKey){th.classList.add(sortAsc?'sort-asc':'sort-desc');
+      th.querySelector('.sort-arrow').textContent=sortAsc?'↑':'↓';}
+    else{th.querySelector('.sort-arrow').textContent='↕';}
+  });
+}
+function setupSort(){
+  document.querySelectorAll('th.sortable').forEach(th=>{
+    th.addEventListener('click',()=>{
+      const k=th.dataset.key;
+      if(sortKey===k){sortAsc=!sortAsc;}else{sortKey=k;sortAsc=true;}
+      updateSortHeaders();updateTable();
+    });
+  });
+}
+function setupSearch(){
+  document.getElementById('searchInput').addEventListener('input',e=>{
+    searchQuery=e.target.value.trim();updateTable();
+  });
+}
+function buildTrendSelect(){
+  const sel=document.getElementById('trendAddSelect');
+  // Filtre les courbes : sur global → toutes, sur whey/oméga/créatine → uniquement
+  // les produits du tab. La catégorie ne s'applique que sur le tab whey.
+  const filtered=HISTORY.map((h,i)=>({h,i})).filter(x=>{
+    if(currentTab!=='global' && x.h.type && x.h.type!==currentTab) return false;
+    if(currentTab==='whey' && currentCategory!=='all' && x.h.categorie!==currentCategory) return false;
+    if(currentSize!=='all' && x.h.taille!==currentSize) return false;
+    return true;
+  });
+  sel.innerHTML=filtered.map(({h,i})=>`<option value='${i}'>${h.produit} — ${h.taille} (${h.points.length} pts)</option>`).join('');
+  if(filtered.length===0){sel.innerHTML='<option>Pas assez de données (besoin de 2+ jours)</option>';}
+}
+function addAllDeals(){
+  // Sélectionne les courbes des produits flagués DEAL pour le tab courant
+  // (limitées à 8 — la limite globale du chart de tendance).
+  const dealKeys = new Set();
+  RAW.forEach(r=>{
+    if(!r.isDeal) return;
+    if(currentTab!=='global' && (r.type||'whey')!==currentTab) return;
+    if(currentTab==='whey' && currentCategory!=='all' && r.categorie!==currentCategory) return;
+    if(currentSize!=='all' && r.taille!==currentSize) return;
+    dealKeys.add(r.produit + '|' + r.taille);
+  });
+  const indices = [];
+  HISTORY.forEach((h,i)=>{
+    if(dealKeys.has(h.produit + '|' + h.taille)) indices.push(i);
+  });
+  selectedTrendIndices = indices.slice(0, 8);
+  renderTrendChips(); buildTrendChart();
+}
+function addAllFiltered(){
+  // Ajoute toutes les courbes correspondant aux filtres courants (tab/cat/taille/édulcorants/labels/recherche).
+  // Cap à 8 séries — la limite globale du chart de tendance.
+  const filteredKeys = new Set(getFiltered().map(r => r.produit + '|' + r.taille));
+  const indices = [];
+  HISTORY.forEach((h,i)=>{
+    if(filteredKeys.has(h.produit + '|' + h.taille)) indices.push(i);
+  });
+  selectedTrendIndices = indices.slice(0, 8);
+  renderTrendChips(); buildTrendChart();
+}
+function addTrendItem(){
+  const idx=parseInt(document.getElementById('trendAddSelect').value);
+  if(isNaN(idx)||selectedTrendIndices.length>=8) return;
+  if(!selectedTrendIndices.includes(idx)){
+    selectedTrendIndices.push(idx);
+    renderTrendChips();
+    buildTrendChart();
+  }
+}
+function removeTrendItem(idx){
+  selectedTrendIndices=selectedTrendIndices.filter(i=>i!==idx);
+  renderTrendChips();
+  buildTrendChart();
+}
+function clearTrendItems(){
+  selectedTrendIndices=[];
+  renderTrendChips();
+  buildTrendChart();
+}
+function renderTrendChips(){
+  const container=document.getElementById('trendSelected');
+  if(!selectedTrendIndices.length){
+    container.innerHTML=`<span style='font-size:11px;color:#aaa;align-self:center;'>Sélectionne un produit et clique « + Ajouter » pour tracer son évolution.</span>`;
+    document.getElementById('trendAddBtn').disabled=false;
+    return;
+  }
+  container.innerHTML=selectedTrendIndices.map((idx,i)=>{
+    const h=HISTORY[idx]; if(!h) return '';
+    const c=TREND_COLORS[i%TREND_COLORS.length];
+    return `<span style='display:inline-flex;align-items:center;gap:4px;background:#fff;border:1.5px solid ${c};color:#333;border-radius:12px;padding:2px 8px 2px 6px;font-size:11px;'>`
+      + `<span style='width:8px;height:8px;border-radius:50%;background:${c};display:inline-block;flex-shrink:0;'></span>`
+      + `${escapeHtml(h.produit.slice(0,28))} — ${escapeHtml(h.taille)}`
+      + `<button onclick='removeTrendItem(${idx})' style='background:none;border:0;cursor:pointer;color:#999;font-size:14px;padding:0 0 0 4px;line-height:1;'>×</button>`
+      + `</span>`;
+  }).join('');
+  document.getElementById('trendAddBtn').disabled=selectedTrendIndices.length>=8;
+}
+function buildTrendRangeChips(){
+  const el = document.getElementById('trendRangeChips');
+  if(!el) return;
+  el.innerHTML = TREND_RANGE_PRESETS.map(p=>
+    `<button class='filter-btn sm ${trendRangeMode===p.k?"active":""}' onclick='setTrendRange("${p.k}")'>${p.l}</button>`
+  ).join('') + `<button class='filter-btn sm' style='${trendRangeMode==="custom"?"border-color:#378ADD;background:#E6F1FB;color:#0C447C":"opacity:0.6"}' onclick='setTrendRange("all")' title='Reset au range complet'>${trendRangeMode==='custom'?'Custom':'⟲'}</button>`;
+}
+function initTrendSlider(){
+  const n = TREND_ALL_DATES.length;
+  const sMin = document.getElementById('trendSliderMin');
+  const sMax = document.getElementById('trendSliderMax');
+  if(!sMin || !sMax) return;
+  const maxIdx = Math.max(0, n - 1);
+  sMin.max = maxIdx; sMax.max = maxIdx;
+  // Si le state n'est pas encore initialisé, prend toute la fenêtre.
+  if(trendSliderIdxMax === 0 || trendSliderIdxMax > maxIdx){
+    trendSliderIdxMin = 0; trendSliderIdxMax = maxIdx;
+  }
+  sMin.value = trendSliderIdxMin; sMax.value = trendSliderIdxMax;
+  if(!sMin._wired){
+    sMin.addEventListener('input', onSliderInput);
+    sMax.addEventListener('input', onSliderInput);
+    sMin._wired = true; sMax._wired = true;
+  }
+  syncSliderUI();
+}
+function onSliderInput(){
+  const sMin = document.getElementById('trendSliderMin');
+  const sMax = document.getElementById('trendSliderMax');
+  let a = parseInt(sMin.value), b = parseInt(sMax.value);
+  // Garde au moins 1 jour d'écart : si on dépasse, on repousse l'autre thumb.
+  if(a > b){ if(this===sMin) sMax.value = a, b = a; else sMin.value = b, a = b; }
+  trendSliderIdxMin = a; trendSliderIdxMax = b;
+  trendRangeMode = 'custom';
+  buildTrendRangeChips();
+  syncSliderUI();
+  buildTrendChart();
+}
+function syncSliderUI(){
+  const n = TREND_ALL_DATES.length;
+  const fill = document.getElementById('trendSliderFill');
+  const lbl = document.getElementById('trendRangeLabel');
+  if(!fill || !lbl) return;
+  if(n <= 1){
+    fill.style.left='0%'; fill.style.right='0%';
+    lbl.textContent = TREND_ALL_DATES[0] || '—';
+    return;
+  }
+  const lo = (trendSliderIdxMin / (n-1)) * 100;
+  const hi = (trendSliderIdxMax / (n-1)) * 100;
+  fill.style.left = lo + '%';
+  fill.style.right = (100 - hi) + '%';
+  const d1 = TREND_ALL_DATES[trendSliderIdxMin] || '—';
+  const d2 = TREND_ALL_DATES[trendSliderIdxMax] || '—';
+  const span = trendSliderIdxMax - trendSliderIdxMin + 1;
+  lbl.textContent = `${d1} → ${d2} (${span} pt${span>1?'s':''})`;
+}
+function setTrendRange(modeKey){
+  trendRangeMode = modeKey;
+  const n = TREND_ALL_DATES.length;
+  if(n === 0){ buildTrendRangeChips(); return; }
+  const preset = TREND_RANGE_PRESETS.find(p=>p.k===modeKey);
+  if(!preset || preset.days === null){
+    // 'all' ou inconnu → toute la fenêtre
+    trendSliderIdxMin = 0;
+    trendSliderIdxMax = n - 1;
+  } else {
+    // Calcule le 1er index dont la date est >= (last - days)
+    const last = TREND_ALL_DATES[n-1];
+    const cutoff = new Date(last);
+    cutoff.setDate(cutoff.getDate() - preset.days);
+    const cutoffStr = cutoff.toISOString().slice(0,10);
+    let firstIdx = TREND_ALL_DATES.findIndex(d => d >= cutoffStr);
+    if(firstIdx < 0) firstIdx = 0;
+    trendSliderIdxMin = firstIdx;
+    trendSliderIdxMax = n - 1;
+  }
+  initTrendSlider();
+  buildTrendRangeChips();
+  buildTrendChart();
+}
+function getTrendDateWindow(){
+  // Renvoie [dateMin, dateMax] (strings ISO) selon le state courant.
+  const n = TREND_ALL_DATES.length;
+  if(n === 0) return [null, null];
+  const lo = Math.max(0, Math.min(trendSliderIdxMin, n-1));
+  const hi = Math.max(0, Math.min(trendSliderIdxMax, n-1));
+  return [TREND_ALL_DATES[lo], TREND_ALL_DATES[hi]];
+}
+function buildTrendChart(){
+  if(chartTrend){chartTrend.destroy(); chartTrend=null;}
+  if(!selectedTrendIndices.length){
+    chartTrend=new Chart(document.getElementById('chartTrend'),{
+      type:'line',data:{labels:[],datasets:[]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}
+    });
+    buildTrendPriceChart();
+    return;
+  }
+  const meta = TREND_META[currentTab] || TREND_META.whey;
+  const trendKey = meta.key, decs = meta.decs, unit = meta.unit;
+  const [winLo, winHi] = getTrendDateWindow();
+  // Dates de l'ensemble des courbes sélectionnées, restreintes à la fenêtre courante.
+  const allDates=[...new Set(selectedTrendIndices.flatMap(idx=>(HISTORY[idx]||{points:[]}).points.map(p=>p.date)))]
+    .filter(d => (!winLo || d >= winLo) && (!winHi || d <= winHi))
+    .sort();
+  const datasets=selectedTrendIndices.map((idx,i)=>{
+    const h=HISTORY[idx]; if(!h) return null;
+    const color=TREND_COLORS[i%TREND_COLORS.length];
+    const dm={}; h.points.forEach(p=>{dm[p.date]=p[trendKey];});
+    return{label:`${h.produit.slice(0,24)} — ${h.taille}`,
+      data:allDates.map(d=>dm[d]??null),
+      borderColor:color,backgroundColor:color+'22',
+      tension:0.2,pointRadius:4,fill:false,spanGaps:true};
+  }).filter(Boolean);
+  chartTrend=new Chart(document.getElementById('chartTrend'),{
+    type:'line',
+    data:{labels:allDates,datasets},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:datasets.length>1,position:'top',labels:{font:{size:11},boxWidth:12}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?Number(ctx.parsed.y).toFixed(decs)+unit:'N/A'}`}}},
+      scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:35}},
+        y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},callback:v=>Number(v).toFixed(decs)+unit},beginAtZero:false,afterFit:(scale)=>{scale.width=78;}}}}
+  });
+  buildTrendPriceChart();
+}
+function buildTrendPriceChart(){
+  if(chartTrendPrice){chartTrendPrice.destroy(); chartTrendPrice=null;}
+  const canvas = document.getElementById('chartTrendPrice');
+  if(!canvas) return;
+  if(!selectedTrendIndices.length){
+    chartTrendPrice=new Chart(canvas,{
+      type:'line',data:{labels:[],datasets:[]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}
+    });
+    return;
+  }
+  const [winLo, winHi] = getTrendDateWindow();
+  const allDates=[...new Set(selectedTrendIndices.flatMap(idx=>(HISTORY[idx]||{points:[]}).points.map(p=>p.date)))]
+    .filter(d => (!winLo || d >= winLo) && (!winHi || d <= winHi))
+    .sort();
+  const datasets=selectedTrendIndices.map((idx,i)=>{
+    const h=HISTORY[idx]; if(!h) return null;
+    const color=TREND_COLORS[i%TREND_COLORS.length];
+    const dm={}; h.points.forEach(p=>{dm[p.date]=p.prix;});
+    return{label:`${h.produit.slice(0,24)} — ${h.taille}`,
+      data:allDates.map(d=>dm[d]??null),
+      borderColor:color,backgroundColor:color+'22',
+      tension:0.2,pointRadius:4,fill:false,spanGaps:true};
+  }).filter(Boolean);
+  chartTrendPrice=new Chart(canvas,{
+    type:'line',
+    data:{labels:allDates,datasets},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:datasets.length>1,position:'top',labels:{font:{size:11},boxWidth:12}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?Number(ctx.parsed.y).toFixed(2)+' EUR':'N/A'}`}}},
+      scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:35}},
+        y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},callback:v=>Number(v).toFixed(2)+' EUR'},beginAtZero:false,afterFit:(scale)=>{scale.width=78;}}}}
+  });
+}
+function setupTrend(){}
+function bestOf(rows, key){ const w=rows.filter(r=>r[key]!=null); return w.length?w.reduce((a,b)=>a[key]<b[key]?a:b):null; }
+function cardHtml(label,value,sub,best){
+  const cls = best?'card-value best':'card-value';
+  const subHtml = sub?`<div class='card-sub'>${escapeHtml(sub)}</div>`:'';
+  return `<div class='card'><div class='card-label'>${escapeHtml(label)}</div><div class='${cls}'>${value}</div>${subHtml}</div>`;
+}
+function buildMetrics(){
+  const tabRows = currentTab==='global' ? RAW.slice() : RAW.filter(r=>(r.type||'whey')===currentTab);
+  const prods=new Set(tabRows.map(r=>r.produit)).size;
+  const cards=[];
+  cards.push(`<div class='card'><div class='card-label'>${escapeHtml(TYPE_TAB_LABEL[currentTab]||'Produits')}</div><div class='card-value'>${prods}</div></div>`);
+  if(currentTab==='global'){
+    const dealCount = tabRows.filter(r=>r.isDeal).length;
+    const oosCount  = tabRows.filter(r=>r.en_stock===false).length;
+    cards.push(`<div class='card'><div class='card-label'>🔥 DEALs en cours</div><div class='card-value' style='color:#FF6B35'>${dealCount}</div><div class='card-sub'>sous moyenne historique -5%</div></div>`);
+    if(oosCount>0) cards.push(`<div class='card'><div class='card-label'>⚠️ Ruptures</div><div class='card-value' style='color:#B23B3B'>${oosCount}</div></div>`);
+    const bw=bestOf(tabRows.filter(r=>(r.type||'whey')==='whey'),'pxkgProt');
+    const bo=bestOf(tabRows.filter(r=>(r.type||'whey')==='omega3'),'coutGOmega');
+    const bcr=bestOf(tabRows.filter(r=>(r.type||'whey')==='creatine'),'coutKgCrea');
+    if(bw) cards.push(cardHtml('Top whey EUR/kg prot', bw.pxkgProt.toFixed(2)+' EUR', bw.produit.slice(0,28), true));
+    if(bo) cards.push(cardHtml('Top oméga EUR/g E+D', bo.coutGOmega.toFixed(3)+' EUR', bo.produit.slice(0,28), true));
+    if(bcr) cards.push(cardHtml('Top créatine EUR/kg', bcr.coutKgCrea.toFixed(2)+' EUR', bcr.produit.slice(0,28), true));
+  } else if(currentTab==='whey'){
+    const bp=bestOf(tabRows,'pxkgProt'), bc=bestOf(tabRows,'cout30'), bl=bestOf(tabRows,'cout3leu'), bx=bestOf(tabRows,'pxkg');
+    if(bp) cards.push(cardHtml('Meilleur EUR/kg protéine', bp.pxkgProt.toFixed(2)+' EUR', `${bp.produit.slice(0,28)} — ${bp.taille}`, true));
+    if(bc) cards.push(cardHtml('Meilleur 30g protéine', bc.cout30.toFixed(3)+' EUR', `${bc.produit.slice(0,28)} — ${bc.taille}`, true));
+    if(bl) cards.push(cardHtml('Meilleur 3g leucine', bl.cout3leu.toFixed(3)+' EUR', `${bl.produit.slice(0,28)} — ${bl.taille}`, true));
+    if(bx) cards.push(cardHtml('Meilleur EUR/kg produit', bx.pxkg.toFixed(2)+' EUR', `${bx.produit.slice(0,28)} — ${bx.taille}`));
+  } else if(currentTab==='omega3'){
+    const bo=bestOf(tabRows,'coutGOmega'), bx=bestOf(tabRows,'pxkg');
+    if(bo) cards.push(cardHtml('Meilleur EUR/g EPA+DHA', bo.coutGOmega.toFixed(3)+' EUR', `${bo.produit.slice(0,28)} — ${bo.taille}`, true));
+    else cards.push(cardHtml('EUR/g EPA+DHA', '— données manquantes —', 'Lance le scraper pour collecter EPA/DHA'));
+    if(bx) cards.push(cardHtml('Meilleur EUR/kg', bx.pxkg.toFixed(2)+' EUR', `${bx.produit.slice(0,28)} — ${bx.taille}`));
+  } else if(currentTab==='creatine'){
+    const bc=bestOf(tabRows,'coutKgCrea'), bx=bestOf(tabRows,'pxkg');
+    if(bc) cards.push(cardHtml('Meilleur EUR/kg créatine', bc.coutKgCrea.toFixed(2)+' EUR', `${bc.produit.slice(0,28)} — ${bc.taille}`, true));
+    if(bx) cards.push(cardHtml('Meilleur EUR/kg', bx.pxkg.toFixed(2)+' EUR', `${bx.produit.slice(0,28)} — ${bx.taille}`));
+  }
+  cards.push(`<div class='card'><div class='card-label'>Mise à jour</div><div class='card-value' style='font-size:16px'>19/06/2026</div></div>`);
+  document.getElementById('metricCards').innerHTML=cards.join('');
+}
+function tabCount(t){ return t==='global' ? RAW.length : RAW.filter(r=>(r.type||'whey')===t).length; }
+function buildTypeTabs(){
+  // Toujours afficher les 4 onglets ; un onglet vide est grisé + compteur (0)
+  const tabs = ['whey','omega3','creatine','global'];
+  document.getElementById('typeTabs').innerHTML = tabs.map(t=>{
+    const n = tabCount(t);
+    const dim = n===0 ? ' style="opacity:0.45"' : '';
+    return `<button class='${t===currentTab?"active":""}'${dim} onclick='setTab("${t}")'>`
+         + `${TYPE_TAB_LABEL[t]||t} <span style='color:#aaa;font-size:11px'>(${n})</span></button>`;
+  }).join('');
+}
+function setTab(t){
+  if(t===currentTab) return;
+  currentTab=t;
+  // Reset des filtres spécifiques à un tab
+  selectedSweeteners.clear(); selectedWheyTypes.clear(); selectedTypeTags.clear();
+  currentSize='all'; currentCategory = (currentTab==='whey') ? (CATEGORIES[0]||'all') : 'all';
+  // Sort key par défaut du tab
+  sortKey = (TAB_PRIMARY[currentTab]||TAB_PRIMARY.whey).sort;
+  sortAsc = true;
+  applyTabUI();
+  buildTypeTabs(); buildCategoryFilters(); buildFilters();
+  buildSweetFilters(); buildWheyFilters(); buildTypeTagFilters(); buildLabelFilters();
+  renderTableHead();
+  buildMetrics();
+  updateCharts();
+  updateTable();
+  selectedTrendIndices=[]; renderTrendChips(); buildTrendSelect();
+  // Reset la fenêtre temporelle au changement de tab (Tout par défaut).
+  setTrendRange('all');
+}
+function applyTabUI(){
+  // .whey-only éléments visibles uniquement sur le tab whey
+  document.querySelectorAll('.whey-only').forEach(el=>{
+    el.classList.toggle('tab-hidden', currentTab!=='whey');
+  });
+  // Sur le tab Global on cache aussi le chart bar principal (mélange whey/oméga/créatine pas pertinent).
+  document.getElementById('primaryChartWrap').classList.toggle('tab-hidden', currentTab==='global');
+  // Sur le tab Global, le chart de tendance principal montre déjà le prix nominal → on masque le doublon.
+  document.getElementById('trendPriceWrap').classList.toggle('tab-hidden', currentTab==='global');
+  // catRow visible uniquement sur whey (Whey/Aliments enrichis/Autres)
+  document.getElementById('catRow').classList.toggle('tab-hidden', currentTab!=='whey');
+  // typeTagRow visible uniquement sur omega3/creatine (pas global, pas whey)
+  const typeTagRow = document.getElementById('typeTagRow');
+  typeTagRow.style.display = (currentTab==='omega3'||currentTab==='creatine') ? 'flex' : 'none';
+  if(currentTab==='omega3') document.getElementById('typeTagLabel').textContent='Forme';
+  if(currentTab==='creatine') document.getElementById('typeTagLabel').textContent='Type';
+  // Met à jour le titre du chart de tendance selon le tab.
+  const meta = TREND_META[currentTab] || TREND_META.whey;
+  document.getElementById('trendChartTitle').textContent = meta.title;
+}
+function buildTypeTagFilters(){
+  if(currentTab==='whey'){ document.getElementById('typeTagFilters').innerHTML=''; return; }
+  const labelMap = currentTab==='omega3' ? OMEGA3_TYPE_LABELS : CREATINE_TYPE_LABELS;
+  const present = Object.keys(labelMap).filter(k=>RAW.some(r=>(r.type||'')===currentTab && (r.typeTags||[]).includes(k)));
+  const chips = present.map(t=>`<button class='filter-btn sm purple ${selectedTypeTags.has(t)?"active":""}' onclick='toggleTypeTag("${t}")'>${escapeHtml(labelMap[t])}</button>`).join('');
+  const lc = `<button class='filter-btn sm' style='border-color:#bbb;background:#f8f8f8;color:#666' onclick='toggleLogic("tt")'>${ttLogic==='AND'?'ET':'OU'}</button>`;
+  document.getElementById('typeTagFilters').innerHTML = present.length ? (lc + chips) : `<span style='font-size:11px;color:#aaa'>aucun détecté — lance le scraper</span>`;
+}
+function toggleTypeTag(t){toggleSet(selectedTypeTags,t);buildTypeTagFilters();updateTable();updateCharts();}
+function buildFilters(){
+  document.getElementById('filters').innerHTML=['all',...SIZES].map(sz=>`
+    <button class='filter-btn sm ${sz===currentSize?"active":""}' onclick='filterSize("${sz}")'>${sz==='all'?'Toutes':sz}</button>`).join('');
+}
+function filterSize(sz){currentSize=sz;buildFilters();updateCharts();updateTable();buildTrendSelect();}
+function toggleSet(set,val){ if(set.has(val)) set.delete(val); else set.add(val); }
+function logicChip(group, mode){
+  return `<button class='filter-btn sm' style='border-color:#bbb;background:#f8f8f8;color:#666' title='Bascule ET / OU' onclick='toggleLogic("${group}")'>${mode==='AND'?'ET':'OU'}</button>`;
+}
+function toggleLogic(group){
+  if(group==='sw') swLogic = swLogic==='OR'?'AND':'OR';
+  if(group==='wt') wtLogic = wtLogic==='OR'?'AND':'OR';
+  if(group==='lbl') lblLogic = lblLogic==='OR'?'AND':'OR';
+  if(group==='tt') ttLogic = ttLogic==='OR'?'AND':'OR';
+  buildSweetFilters(); buildWheyFilters(); buildTypeTagFilters(); buildLabelFilters();
+  updateTable(); updateCharts();
+}
+function buildSweetFilters(){
+  const chips = SWEETENERS.map(t=>`
+    <button class='filter-btn sm green ${selectedSweeteners.has(t)?"active":""}' onclick='toggleSweet("${t}")'>${SWEETENER_LABELS[t]||t}</button>`).join('');
+  document.getElementById('sweetFilters').innerHTML = chips ?
+    (logicChip('sw', swLogic) + chips) :
+    `<span style='font-size:11px;color:#aaa'>aucun détecté</span>`;
+}
+function toggleSweet(t){toggleSet(selectedSweeteners,t);buildSweetFilters();updateTable();updateCharts();}
+function buildWheyFilters(){
+  const chips = WHEY_TYPES.map(t=>`
+    <button class='filter-btn sm purple ${selectedWheyTypes.has(t)?"active":""}' onclick='toggleWhey("${t}")'>${WHEY_TYPE_LABELS[t]||t}</button>`).join('');
+  document.getElementById('wheyFilters').innerHTML = chips ?
+    (logicChip('wt', wtLogic) + chips) :
+    `<span style='font-size:11px;color:#aaa'>aucun détecté</span>`;
+}
+function toggleWhey(t){toggleSet(selectedWheyTypes,t);buildWheyFilters();updateTable();updateCharts();}
+function getAllLabels(){
+  const s=new Set();
+  for(const p of PRODUCTS){ for(const lb of (effectiveTags(p).labels||[])) s.add(lb); }
+  return [...s].sort();
+}
+function buildLabelFilters(){
+  const labels=getAllLabels();
+  const row=document.getElementById('labelFiltersRow');
+  if(!labels.length){ row.style.display='none'; selectedLabels.clear(); return; }
+  row.style.display='flex';
+  const chips = labels.map(t=>`
+    <button class='filter-btn sm amber ${selectedLabels.has(t)?"active":""}' onclick='toggleLabel(${escapeHtml(JSON.stringify(t))})'>${escapeHtml(t)}</button>`).join('');
+  document.getElementById('labelFilters').innerHTML = labels.length>1 ? (logicChip('lbl', lblLogic) + chips) : chips;
+}
+function toggleLabel(t){toggleSet(selectedLabels,t);buildLabelFilters();updateTable();updateCharts();}
+function openEditModal(produit){
+  modalCurrent = produit;
+  const r = RAW.find(x=>x.produit===produit);
+  const eff = effectiveTags(produit);
+  document.getElementById('modalProduit').textContent = produit;
+  const sw = (r&&r.sweeteners||[]).map(t=>SWEETENER_LABELS[t]||t).join(', ') || '—';
+  const wt = (r&&r.wheyTypes||[]).map(t=>WHEY_TYPE_LABELS[t]||t).join(', ') || '—';
+  const ingr = r ? (r.ingredients||'').slice(0,180) : '';
+  document.getElementById('modalAuto').innerHTML =
+    `<b>Détecté auto :</b><br>· Édulcorants : ${sw}<br>· Type protéine : ${wt}<br>` +
+    (ingr ? `<br><span style='color:#999'>${escapeHtml(ingr)}${ingr.length>=180?'…':''}</span>` :
+     `<br><span style='color:#B23B3B'>⚠️ Aucun ingrédient capturé</span>`);
+  document.getElementById('modalLabels').value = (eff.labels||[]).join(', ');
+  document.getElementById('modalNote').value = eff.note || '';
+  document.getElementById('editModal').classList.add('open');
+}
+function closeEditModal(){ document.getElementById('editModal').classList.remove('open'); modalCurrent=null; }
+function saveEdit(){
+  if(!modalCurrent) return;
+  const labels = document.getElementById('modalLabels').value
+    .split(',').map(s=>s.trim()).filter(Boolean);
+  const note = document.getElementById('modalNote').value.trim();
+  const srv = SERVER_TAGS[modalCurrent];
+  const sameAsServer = srv && JSON.stringify(srv.labels||[])===JSON.stringify(labels) && (srv.note||'')===note;
+  const empty = !labels.length && !note;
+  if(empty && !srv){ delete LOCAL_TAGS[modalCurrent]; }
+  else if(sameAsServer){ delete LOCAL_TAGS[modalCurrent]; }
+  else { LOCAL_TAGS[modalCurrent] = {labels, note}; }
+  saveLocalTags(LOCAL_TAGS);
+  closeEditModal();
+  refreshAll();
+}
+function resetProductEdit(){
+  if(!modalCurrent) return;
+  if(!confirm('Réinitialiser tags & note de ce produit (revient à tags.json) ?')) return;
+  delete LOCAL_TAGS[modalCurrent];
+  saveLocalTags(LOCAL_TAGS);
+  closeEditModal();
+  refreshAll();
+}
+function refreshAll(){ updateEditStatus(); buildLabelFilters(); updateTable(); }
+function updateEditStatus(){
+  const n = Object.keys(LOCAL_TAGS).length;
+  document.getElementById('editStatus').textContent = `${n} modif${n>1?'s':''} locale${n>1?'s':''}`;
+  document.getElementById('exportBtn').disabled = false;
+}
+function buildExportPayload(){
+  // Fusion : SERVER_TAGS écrasés par LOCAL_TAGS
+  const merged = {};
+  for(const [k,v] of Object.entries(SERVER_TAGS)){
+    if((v.labels&&v.labels.length) || (v.note||'').length) merged[k] = {labels:[...(v.labels||[])], note:v.note||''};
+  }
+  for(const [k,v] of Object.entries(LOCAL_TAGS)){
+    if((v.labels&&v.labels.length) || (v.note||'').length) merged[k] = {labels:[...(v.labels||[])], note:v.note||''};
+    else delete merged[k];
+  }
+  return merged;
+}
+function exportTags(){
+  const payload = buildExportPayload();
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'tags.json'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+function clearLocalEdits(){
+  const n = Object.keys(LOCAL_TAGS).length;
+  if(!n) return;
+  if(!confirm(`Supprimer ${n} modif(s) locale(s) ? Les valeurs reviendront à tags.json.`)) return;
+  LOCAL_TAGS = {};
+  saveLocalTags(LOCAL_TAGS);
+  refreshAll();
+}
+// Sort key initial : adapté au tab par défaut
+sortKey = (TAB_PRIMARY[currentTab]||TAB_PRIMARY.whey).sort;
+buildTypeTabs();applyTabUI();
+buildMetrics();buildCategoryFilters();buildFilters();
+buildSweetFilters();buildWheyFilters();buildTypeTagFilters();buildLabelFilters();
+initCharts();
+buildTrendSelect();renderTrendChips();
+buildTrendRangeChips();initTrendSlider();setTrendRange('all');
+renderTableHead();setupSearch();updateEditStatus();updateTable();
+</script>
+</body>
+</html>

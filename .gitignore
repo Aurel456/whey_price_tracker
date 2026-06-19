@@ -14,6 +14,7 @@ venv/
 # Generated output
 # whey_prices.xlsx et whey_dashboard.html sont versionnés (suivi de prix dans git)
 errors.log
+myprotein_errors.log
 
 # OS
 .DS_Store
