@@ -16,6 +16,7 @@ import os
 import random
 import re
 import sys
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
@@ -30,6 +31,45 @@ EXCEL_PATH       = Path(__file__).parent / "whey_prices.xlsx"
 DESCRIPTIONS_PATH = Path(__file__).parent / "descriptions.json"
 TAGS_PATH        = Path(__file__).parent / "tags.json"
 ERROR_LOG_PATH   = Path(__file__).parent / "errors.log"
+
+
+# ── Config multi-sites ────────────────────────────────────────────────────────
+# Toute la couche Excel + dashboard + recommandations + sanity est partagée entre
+# les sites scrapés (HSN, MyProtein, …). Le seul paramètre qui change est l'ensemble
+# des chemins/noms de fichiers en sortie + l'étiquette de marque. On les regroupe
+# dans un SiteConfig passé en paramètre optionnel (défaut = HSN → comportement
+# historique inchangé). Un nouveau site = un nouveau SiteConfig, sans dupliquer le
+# dashboard.
+@dataclass(frozen=True)
+class SiteConfig:
+    name: str               # identifiant interne ("HSN", "MyProtein")
+    brand: str              # libellé affiché dans les titres/H1 du dashboard
+    excel_path: Path        # fichier historique des prix
+    error_log_path: Path    # journal d'erreurs
+    dashboard_local: str    # dashboard, ouverture locale (racine du repo)
+    dashboard_docs: str     # dashboard, miroir GitHub Pages (docs/)
+    reco_local: str         # page recommandations, locale (racine)
+    reco_docs: str          # page recommandations, GitHub Pages (docs/)
+    # Lien croisé vers le dashboard de l'AUTRE site (nav inter-sites sur la page
+    # centrale). Laisser brand vide pour ne pas afficher de lien.
+    other_brand: str = ""
+    other_dashboard_local: str = ""
+    other_dashboard_docs: str = ""
+
+
+HSN_CFG = SiteConfig(
+    name="HSN",
+    brand="HSN",
+    excel_path=EXCEL_PATH,
+    error_log_path=ERROR_LOG_PATH,
+    dashboard_local="whey_dashboard.html",
+    dashboard_docs="dashboard.html",
+    reco_local="recommandations.html",
+    reco_docs="index.html",
+    other_brand="MyProtein",
+    other_dashboard_local="myprotein_dashboard.html",
+    other_dashboard_docs="myprotein-dashboard.html",
+)
 
 # Sanity checks : bornes large pour détecter UNIQUEMENT les erreurs de parsing
 # (cellule vide → 0, mauvaise unité × 1000, valeurs négatives, etc.).
@@ -95,10 +135,11 @@ PORT_RE = re.compile(
 )
 
 # ── Logging d'erreurs ─────────────────────────────────────────────────────────
-def log_error(url: str, reason: str) -> None:
+def log_error(url: str, reason: str, cfg: "SiteConfig" = None) -> None:
     """Append une ligne dans errors.log avec timestamp + url + raison."""
+    log_path = (cfg or HSN_CFG).error_log_path
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with ERROR_LOG_PATH.open("a", encoding="utf-8") as f:
+    with log_path.open("a", encoding="utf-8") as f:
         f.write(f"[{ts}] {url}\n   {reason}\n")
 
 
@@ -150,7 +191,7 @@ def _style(cell, fill=None, font=None, alignment=None, border=THIN_BORDER):
     if border:    cell.border = border
 
 
-def init_workbook():
+def init_workbook(cfg: "SiteConfig" = HSN_CFG):
     wb = Workbook()
     ws = wb.active
     ws.title = "Historique"
@@ -160,14 +201,14 @@ def init_workbook():
         c = ws.cell(row=1, column=col, value=h)
         _style(c, fill=HEADER_FILL, font=HEADER_FONT, alignment=CENT_ALIGN)
         ws.column_dimensions[get_column_letter(col)].width = w
-    wb.save(EXCEL_PATH)
+    wb.save(cfg.excel_path)
     return wb
 
 
-def load_or_create_workbook():
-    if not EXCEL_PATH.exists():
-        return init_workbook()
-    wb = load_workbook(EXCEL_PATH)
+def load_or_create_workbook(cfg: "SiteConfig" = HSN_CFG):
+    if not cfg.excel_path.exists():
+        return init_workbook(cfg)
+    wb = load_workbook(cfg.excel_path)
     ws = wb["Historique"]
     existing = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
     if len(existing) < len(HEADERS):
@@ -175,7 +216,7 @@ def load_or_create_workbook():
             c = ws.cell(row=1, column=col, value=h)
             _style(c, fill=HEADER_FILL, font=HEADER_FONT, alignment=CENT_ALIGN)
             ws.column_dimensions[get_column_letter(col)].width = COL_WIDTHS[col - 1]
-        wb.save(EXCEL_PATH)
+        wb.save(cfg.excel_path)
     return wb
 
 
@@ -195,8 +236,8 @@ def _to_float(val):
         return None
 
 
-def append_rows(rows: list):
-    wb = load_or_create_workbook()
+def append_rows(rows: list, cfg: "SiteConfig" = HSN_CFG):
+    wb = load_or_create_workbook(cfg)
     ws = wb["Historique"]
     today = date.today().isoformat()
     next_row = ws.max_row + 1
@@ -245,7 +286,7 @@ def append_rows(rows: list):
             else:
                 c.font = Font(name="Arial", size=9)
         next_row += 1
-    wb.save(EXCEL_PATH)
+    wb.save(cfg.excel_path)
 
 
 # ── Scraping helpers ──────────────────────────────────────────────────────────
@@ -711,15 +752,20 @@ def _parse_size_kg(label: str):
     return val if unit.startswith("k") else val / 1000
 
 
-def _enrich_row(row: dict, nutri: dict) -> dict:
-    """Ajoute nutrition + acides aminés + métriques selon le type de produit."""
+def _enrich_row(row: dict, nutri: dict, ptype: str = None) -> dict:
+    """Ajoute nutrition + acides aminés + métriques selon le type de produit.
+
+    `ptype` (whey/omega3/creatine) peut être fourni explicitement — utile pour les
+    sites où l'URL ne révèle pas le type (MyProtein). À défaut, déduit de l'URL.
+    """
     n = nutri.get("nutrition", {})
     aa = nutri.get("amino_acids", {})
     row["amino_acids"] = aa
     row["ingredients"] = nutri.get("ingredients", "")
     row.update(n)
 
-    ptype = _detect_product_type(row.get("url", ""))
+    if ptype is None:
+        ptype = _detect_product_type(row.get("url", ""))
     row["type_produit"] = ptype
 
     px_kg = _to_float(row.get("px_kg"))
@@ -961,10 +1007,10 @@ async def scrape_product(page, url: str) -> list:
 
 
 # ── Dashboard HTML ────────────────────────────────────────────────────────────
-def generate_dashboard(rows=None):
+def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
     """Regenerate whey_dashboard.html from current Excel data (or provided rows)."""
     if rows is None:
-        wb = load_or_create_workbook()
+        wb = load_or_create_workbook(cfg)
         ws = wb["Historique"]
         hdrs = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
         rows = [
@@ -1110,7 +1156,7 @@ def generate_dashboard(rows=None):
         "<head>\n"
         "<meta charset='UTF-8'>\n"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n"
-        f"<title>HSN Whey Tracker — {today_str}</title>\n"
+        f"<title>{cfg.brand} Whey Tracker — {today_str}</title>\n"
         "<script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js'></script>\n"
         "<style>\n"
         "*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }\n"
@@ -1243,7 +1289,7 @@ def generate_dashboard(rows=None):
         "</style>\n"
         "</head>\n"
         "<body>\n"
-        "<h1>HSN — Suivi des prix nutrition sportive</h1>\n"
+        f"<h1>{cfg.brand} — Suivi des prix nutrition sportive</h1>\n"
         f"<p class='sub'>Derniere mise a jour : {today_str} &nbsp;|&nbsp; "
         f"{len(all_products)} produits &nbsp;|&nbsp; {len(dates)} jour(s) de donnees</p>\n"
         "<p style='margin:-10px 0 18px'><a href='__RECO_HREF__' "
@@ -2190,18 +2236,18 @@ def generate_dashboard(rows=None):
     # Le lien dashboard→reco (__RECO_HREF__) diffère selon la destination :
     #   - racine            → recommandations.html
     #   - GitHub Pages (docs/) → index.html (l'accueil = la reco)
-    dash_path = EXCEL_PATH.parent / "whey_dashboard.html"
-    dash_path.write_text(html.replace("__RECO_HREF__", "recommandations.html"), encoding="utf-8")
+    dash_path = cfg.excel_path.parent / cfg.dashboard_local
+    dash_path.write_text(html.replace("__RECO_HREF__", cfg.reco_local), encoding="utf-8")
     print(f"Dashboard : {dash_path}")
 
-    docs_dir = EXCEL_PATH.parent / "docs"
+    docs_dir = cfg.excel_path.parent / "docs"
     docs_dir.mkdir(exist_ok=True)
-    pages_path = docs_dir / "dashboard.html"
-    pages_path.write_text(html.replace("__RECO_HREF__", "index.html"), encoding="utf-8")
+    pages_path = docs_dir / cfg.dashboard_docs
+    pages_path.write_text(html.replace("__RECO_HREF__", cfg.reco_docs), encoding="utf-8")
     print(f"Pages    : {pages_path}")
 
     # Page vitrine grand public (recommandations) — réutilise les mêmes rows.
-    generate_recommendations(rows)
+    generate_recommendations(rows, cfg)
 
 
 # ── Page de recommandations (vitrine grand public) ────────────────────────────
@@ -2477,10 +2523,10 @@ footer .disclaimer{max-width:560px;margin:10px auto 0;font-size:12px;opacity:.85
 """
 
 
-def generate_recommendations(rows=None):
+def generate_recommendations(rows=None, cfg: "SiteConfig" = HSN_CFG):
     """Génère recommandations.html (racine + docs/) — page vitrine grand public."""
     if rows is None:
-        wb = load_or_create_workbook()
+        wb = load_or_create_workbook(cfg)
         ws = wb["Historique"]
         hdrs = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
         rows = [
@@ -2641,11 +2687,21 @@ renderCats();renderCrit();renderOut();
         for ico, title, body in edu
     )
 
+    # Lien croisé vers le dashboard de l'autre site (nav inter-sites). Le token
+    # __OTHER_DASHBOARD_HREF__ est résolu à l'écriture (versions racine vs docs).
+    other_cta = other_foot = ""
+    if cfg.other_brand:
+        other_cta = (
+            f"<a href='__OTHER_DASHBOARD_HREF__' style='margin-left:14px'>"
+            f"📊 Dashboard {cfg.other_brand} →</a>"
+        )
+        other_foot = f" &nbsp;·&nbsp; <a href='__OTHER_DASHBOARD_HREF__'>Dashboard {cfg.other_brand}</a>"
+
     html = (
         "<!DOCTYPE html>\n<html lang='fr'>\n<head>\n<meta charset='UTF-8'>\n"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n"
-        f"<title>Guide nutrition sportive HSN — meilleurs rapports qualité-prix ({today_str})</title>\n"
-        "<meta name='description' content='Les meilleures whey, oméga-3 et créatine de HSNstore au meilleur rapport qualité-prix, mis à jour chaque jour.'>\n"
+        f"<title>Guide nutrition sportive {cfg.brand} — meilleurs rapports qualité-prix ({today_str})</title>\n"
+        f"<meta name='description' content='Les meilleures whey, oméga-3 et créatine de {cfg.brand} au meilleur rapport qualité-prix, mis à jour chaque jour.'>\n"
         "<link rel='preconnect' href='https://fonts.googleapis.com'>\n"
         "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>\n"
         "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>\n"
@@ -2681,15 +2737,17 @@ renderCats();renderCrit();renderOut();
         "</div></section>\n"
         # CTA dashboard
         "<section style='padding-top:0'><div class='wrap big-cta'>"
-        "<a href='__DASHBOARD_HREF__'>📊 Explorer toutes les données &amp; graphiques →</a>"
+        f"<a href='__DASHBOARD_HREF__'>📊 Explorer les données {cfg.brand} &amp; graphiques →</a>"
+        f"{other_cta}"
         "</div></section>\n"
         # Footer
         "<footer><div class='wrap'>"
         f"Dernière mise à jour : {today_str}"
-        " &nbsp;·&nbsp; <a href='__DASHBOARD_HREF__'>Dashboard complet</a>"
+        f" &nbsp;·&nbsp; <a href='__DASHBOARD_HREF__'>Dashboard {cfg.brand}</a>"
+        f"{other_foot}"
         " &nbsp;·&nbsp; <a href='https://github.com/Aurel456/whey_price_tracker' target='_blank' rel='noopener'>Code source</a>"
-        "<p class='disclaimer'>Projet personnel, non affilié à HSNstore. Prix relevés automatiquement "
-        "sur hsnstore.fr et donnés à titre indicatif — vérifie toujours le prix sur le site avant d'acheter.</p>"
+        f"<p class='disclaimer'>Projet personnel, non affilié à {cfg.brand}. Prix relevés automatiquement "
+        f"sur le site de {cfg.brand} et donnés à titre indicatif — vérifie toujours le prix sur le site avant d'acheter.</p>"
         "</div></footer>\n"
         f"<script>\n{reco_js}\n</script>\n"
         "</body>\n</html>\n"
@@ -2699,12 +2757,15 @@ renderCats();renderCrit();renderOut();
     # Le lien vers le dashboard diffère selon la destination :
     #   - racine            → whey_dashboard.html
     #   - GitHub Pages (docs/) → dashboard.html
-    out_root = EXCEL_PATH.parent / "recommandations.html"
-    out_root.write_text(html.replace("__DASHBOARD_HREF__", "whey_dashboard.html"), encoding="utf-8")
-    docs_dir = EXCEL_PATH.parent / "docs"
+    out_root = cfg.excel_path.parent / cfg.reco_local
+    root_html = (html.replace("__DASHBOARD_HREF__", cfg.dashboard_local)
+                     .replace("__OTHER_DASHBOARD_HREF__", cfg.other_dashboard_local))
+    out_root.write_text(root_html, encoding="utf-8")
+    docs_dir = cfg.excel_path.parent / "docs"
     docs_dir.mkdir(exist_ok=True)
-    pages_html = html.replace("__DASHBOARD_HREF__", "dashboard.html")
-    (docs_dir / "index.html").write_text(pages_html, encoding="utf-8")            # accueil Pages
+    pages_html = (html.replace("__DASHBOARD_HREF__", cfg.dashboard_docs)
+                      .replace("__OTHER_DASHBOARD_HREF__", cfg.other_dashboard_docs))
+    (docs_dir / cfg.reco_docs).write_text(pages_html, encoding="utf-8")           # accueil Pages
     print(f"Recommandations : {out_root}")
 
 
@@ -2730,13 +2791,13 @@ def _is_blocked_row(row: dict) -> bool:
     return bool(BLOCKED_NAME_RE.search(name))
 
 
-def _last_date_product_count() -> tuple:
+def _last_date_product_count(cfg: "SiteConfig" = HSN_CFG) -> tuple:
     """Renvoie (date, nb_produits_uniques) de la dernière date dans l'Excel.
     Renvoie (None, 0) si l'Excel n'existe pas ou est vide."""
-    if not EXCEL_PATH.exists():
+    if not cfg.excel_path.exists():
         return None, 0
     try:
-        wb = load_workbook(EXCEL_PATH, read_only=True)
+        wb = load_workbook(cfg.excel_path, read_only=True)
         ws = wb["Historique"]
         hdrs = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
         if "Date" not in hdrs or "Produit" not in hdrs:
@@ -2760,7 +2821,7 @@ def _last_date_product_count() -> tuple:
         return None, 0
 
 
-def sanity_check_rows(rows: list) -> tuple:
+def sanity_check_rows(rows: list, cfg: "SiteConfig" = HSN_CFG) -> tuple:
     """Filtre les rows blocked et vérifie qu'on a un snapshot crédible.
     Renvoie (rows_filtered, ok, raison). `ok=False` → le caller doit exit non-zéro."""
     n_in = len(rows)
@@ -2771,13 +2832,13 @@ def sanity_check_rows(rows: list) -> tuple:
 
     if n_blocked:
         print(f"  [sanity] {n_blocked}/{n_in} rows blocked (Cloudflare) — filtrées")
-        log_error("(sanity)", f"{n_blocked} rows blocked (sur {n_in}) ignorées avant append")
+        log_error("(sanity)", f"{n_blocked} rows blocked (sur {n_in}) ignorées avant append", cfg)
 
     if n_clean == 0:
         return clean, False, "aucune row valide après filtrage des blocked"
 
     n_products_today = len(set(r.get("name", "") for r in clean if r.get("name")))
-    last_date, n_products_last = _last_date_product_count()
+    last_date, n_products_last = _last_date_product_count(cfg)
 
     if last_date and last_date == date.today().isoformat():
         # Re-run du même jour : pas de comparaison utile (on s'auto-comparerait)

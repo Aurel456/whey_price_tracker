@@ -45,25 +45,37 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Run tracker
-        run: python hsn_tracker.py
+      - name: Run trackers (HSN + MyProtein en parallèle)
+        # Les deux scripts écrivent des fichiers disjoints (Excel/HTML/logs séparés)
+        # → aucune contention. On les lance en arrière-plan et on attend les deux.
+        # Temps total ≈ max(HSN, MyProtein) au lieu de la somme. On NE fait jamais
+        # échouer le job ici : le sanity check de chaque script protège déjà ses
+        # propres fichiers, et l'étape commit ne pousse que ce qui a changé — un
+        # site KO n'empêche pas l'autre d'être committé.
+        run: |
+          python hsn_tracker.py & PID_HSN=$!
+          python myprotein_tracker.py & PID_MP=$!
+          wait $PID_HSN; echo "HSN exit=$?"
+          wait $PID_MP;  echo "MyProtein exit=$?"
 
       - name: Show errors log (if any)
         if: always()
         run: |
-          if [ -f errors.log ]; then
-            echo "=== errors.log ==="
-            tail -n 100 errors.log
-          else
-            echo "No errors logged"
-          fi
+          for f in errors.log myprotein_errors.log; do
+            if [ -f "$f" ]; then
+              echo "=== $f ==="
+              tail -n 100 "$f"
+            fi
+          done
 
       - name: Commit and push prices
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add whey_prices.xlsx whey_dashboard.html recommandations.html \
-                  docs/index.html docs/dashboard.html 2>/dev/null || true
+                  docs/index.html docs/dashboard.html \
+                  myprotein_prices.xlsx myprotein_dashboard.html myprotein-recommandations.html \
+                  docs/myprotein-dashboard.html docs/myprotein.html 2>/dev/null || true
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else

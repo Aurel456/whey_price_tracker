@@ -122,6 +122,37 @@ Paramètres ajustables en haut du script :
 | `PROT_MIN_PCT` | `5.0` | Borne basse du sanity check (%). Détecte uniquement les erreurs de parsing (cellule vide, mauvaise unité). NE filtre PAS par catégorie — les Aliments enrichis 30-70% sont légitimes. |
 | `PROT_MAX_PCT` | `95.0` | Borne haute du sanity check (%). Au-dessus : erreur loggée. |
 
+## Suivi MyProtein (second site)
+
+En plus de HSN, le projet suit [fr.myprotein.com](https://fr.myprotein.com) via un
+script séparé `myprotein_tracker.py`. Il **réutilise toute la couche Excel +
+dashboard + recommandations** de `hsn_tracker.py` (via un `SiteConfig` dédié), mais
+avec un scraping spécifique à la plateforme THG de MyProtein et des **fichiers de
+sortie séparés** :
+
+| Fichier | Rôle |
+| ------ | --- |
+| `myprotein_tracker.py` | Script MyProtein (scraping + Excel + dashboard) |
+| `myprotein_prices.xlsx` | Historique des prix MyProtein |
+| `myprotein_dashboard.html` / `docs/myprotein-dashboard.html` | Dashboard (local / GitHub Pages) |
+| `myprotein-recommandations.html` / `docs/myprotein.html` | Page recommandations (local / GitHub Pages) |
+
+```bash
+python myprotein_tracker.py
+```
+
+Particularités :
+
+- **Shortlist de produits clés** définie en haut du script (`PRODUCTS`, avec leur
+  type whey/creatine/omega3), extensible. Pas de crawl de catégorie.
+- Tailles, prix et **stock** viennent de la `ld+json` `ProductGroup` de la page
+  (pas du DOM). Whey : regroupé par **portions** ; créatine : par **poids** ;
+  oméga : par **nb de gélules** (cf. AGENTS.md pour le pourquoi).
+- MyProtein **ne publie pas de profil d'acides aminés** → la colonne €/3g leucine
+  reste vide (les métriques €/kg protéine et €/30g protéine fonctionnent).
+- Le workflow GitHub Actions lance les deux trackers à la suite et commit leurs
+  fichiers ensemble.
+
 ## Catégories
 
 Les produits sont automatiquement classés selon leur taux de protéines pour 100g :
