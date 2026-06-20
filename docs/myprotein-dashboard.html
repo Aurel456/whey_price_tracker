@@ -3,7 +3,7 @@
 <head>
 <meta charset='UTF-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-<title>MyProtein Whey Tracker — 19/06/2026</title>
+<title>MyProtein Whey Tracker — 21/06/2026</title>
 <script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js'></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -90,7 +90,7 @@ th.sortable.sort-asc .sort-arrow, th.sortable.sort-desc .sort-arrow { opacity: 1
 </head>
 <body>
 <h1>MyProtein — Suivi des prix nutrition sportive</h1>
-<p class='sub'>Derniere mise a jour : 19/06/2026 &nbsp;|&nbsp; 8 produits &nbsp;|&nbsp; 1 jour(s) de donnees</p>
+<p class='sub'>Derniere mise a jour : 21/06/2026 &nbsp;|&nbsp; 8 produits &nbsp;|&nbsp; 1 jour(s) de donnees</p>
 <p style='margin:-10px 0 18px'><a href='myprotein.html' style='display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#185FA5;background:#E6F1FB;padding:7px 14px;border-radius:10px;'>✨ Voir la page recommandations (grand public)</a></p>
 <div class='type-tabs' id='typeTabs'></div>
 <div class='cards' id='metricCards'></div>
@@ -782,7 +782,7 @@ function buildMetrics(){
     if(bc) cards.push(cardHtml('Meilleur EUR/kg créatine', bc.coutKgCrea.toFixed(2)+' EUR', `${bc.produit.slice(0,28)} — ${bc.taille}`, true));
     if(bx) cards.push(cardHtml('Meilleur EUR/kg', bx.pxkg.toFixed(2)+' EUR', `${bx.produit.slice(0,28)} — ${bx.taille}`));
   }
-  cards.push(`<div class='card'><div class='card-label'>Mise à jour</div><div class='card-value' style='font-size:16px'>19/06/2026</div></div>`);
+  cards.push(`<div class='card'><div class='card-label'>Mise à jour</div><div class='card-value' style='font-size:16px'>21/06/2026</div></div>`);
   document.getElementById('metricCards').innerHTML=cards.join('');
 }
 function tabCount(t){ return t==='global' ? RAW.length : RAW.filter(r=>(r.type||'whey')===t).length; }
