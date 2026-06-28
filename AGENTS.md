@@ -154,13 +154,25 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
   `sku`, `offers.price` (EUR) et `offers.availability` → prix + **stock** sans
   interaction DOM. Gérer aussi le cas d'un `Product` simple (mono-taille).
 - **Clé de regroupement par taille = dépend du type** (observé sur le site) :
-  - **whey** : le poids net varie selon l'arôme (chocolat plus dense → « 930g »
-    pour le même pot « 1kg »), mais le **nb de portions est stable** → clé = portions.
+  - **whey** : clé = **nb de portions**, MAIS restreint aux **portions canoniques**
+    lues sur les boutons DOM (`button.elements-variations-button`, texte
+    « 15 PORTIONS »…, ex. {15,30,90,150}). La ld+json contient ~107 variantes
+    (taille × arôme) dont des **éditions limitées mono-taille** (8/20/21/32/64/83
+    portions) qui ne sont PAS dans le sélecteur du site → sans restriction, le
+    dashboard affichait p.ex. « 1.9kg / 59.99 » (64 portions, édition Miel vanille).
+    On lit les boutons **sans cliquer** (présents dans le HTML statique) ; pas de
+    pilotage SPA (les clics fragiles n'étaient pas fiables — overlay `listrak-popup`,
+    swatches invisibles). Attention : le **poids n'est PAS un axe stable**, même à
+    portions égales : le Sans arôme fait 23 g/portion (345 g pour 15 portions) vs
+    ~30 g/portion pour un arôme (450 g) → on garde la variante la moins chère en
+    stock par bucket (choix « best deal »), donc le poids affiché peut varier d'un
+    arôme à l'autre. Libellé whey = « N portions (poids) ».
   - **créatine** : les arômes ajoutent des charges → portions variables à poids
-    égal, mais le **poids est stable** → clé = poids.
+    égal, mais le **poids est stable** → clé = poids. Déjà propre (4 buckets), pas
+    de restriction canonique nécessaire (les boutons créa sont en portions, qui ne
+    mappent pas sur les poids ld+json — ne pas tenter de les croiser).
   - **oméga** : clé = nb de gélules.
-  Sans ça, on obtient des dizaines de pseudo-tailles parasites (33 pour l'Impact
-  Whey). On garde la variante la moins chère en stock par bucket.
+  On garde la variante la moins chère en stock par bucket.
 - **Nutrition** : dans un accordéon (à **déplier** avant lecture, sinon `innerText`
   vide). Table à colonnes `Pour 100 g` / `Par portion` — ordre **inverse** de HSN
   (où col[2]=100g) → extracteur dédié `_parse_mp_nutrition` qui lit par **en-tête

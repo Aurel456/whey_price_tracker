@@ -138,14 +138,18 @@ def _iter_variants(ld_nodes: list):
     return out
 
 
-def _group_by_size(variants: list, ptype: str) -> list:
+def _group_by_size(variants: list, ptype: str, canon_portions=None) -> list:
     """Regroupe les variantes par taille (une ligne par taille réelle).
 
     Une déclinaison MyProtein = taille × arôme (jusqu'à 100). On dédoublonne en
     gardant la variante la **moins chère en stock** (sinon la moins chère). La clé
     de regroupement dépend du type, car l'axe stable diffère (observé sur le site) :
-      - whey : le POIDS net varie selon l'arôme (chocolat plus dense), mais le nb
-        de PORTIONS est fixe par taille nominale → clé = portions.
+      - whey : clé = nb de PORTIONS (axe des boutons de taille du site). Le POIDS
+        net varie selon l'arôme (Sans arôme = 23 g/portion → 345 g pour 15 portions ;
+        arôme = 30 g/portion → 450 g), donc le poids ne peut pas servir de clé.
+        On restreint aux **portions canoniques** lues sur les boutons DOM
+        (`canon_portions`, ex. {15,30,90,150}) pour écarter les éditions limitées
+        mono-taille (8/20/21/32/64/83 portions) qui polluaient le dashboard.
       - créatine : les arômes ajoutent des charges → les portions varient à poids
         égal, mais le POIDS est fixe → clé = poids.
       - oméga-3 : clé = nb de gélules.
@@ -165,12 +169,18 @@ def _group_by_size(variants: list, ptype: str) -> list:
             kg = _weight_to_kg(v["name"])
             if not kg:
                 continue
-            mp = PORTIONS_RE.search(v["name"])
-            if ptype == "whey" and mp:
-                key = ("port", int(mp.group(1)))
+            if ptype == "whey":
+                mp = PORTIONS_RE.search(v["name"])
+                if not mp:
+                    continue  # whey sans nb de portions → variante non standard
+                port = int(mp.group(1))
+                if canon_portions and port not in canon_portions:
+                    continue  # taille non canonique (édition limitée mono-taille)
+                key = ("port", port)
+                extra = {"size_kg": kg, "portions": port}
             else:
                 key = ("kg", round(kg, 2))
-            extra = {"size_kg": kg}
+                extra = {"size_kg": kg}
         cur = buckets.get(key)
         better = (
             cur is None
@@ -178,8 +188,12 @@ def _group_by_size(variants: list, ptype: str) -> list:
             or (v["in_stock"] == cur["in_stock"] and v["price"] < cur["price"])
         )
         if better:
-            label = (f"{extra['caps']} gélules" if ptype == "omega3"
-                     else _kg_label(extra["size_kg"]))
+            if ptype == "omega3":
+                label = f"{extra['caps']} gélules"
+            elif ptype == "whey":
+                label = f"{extra['portions']} portions ({_kg_label(extra['size_kg'])})"
+            else:
+                label = _kg_label(extra["size_kg"])
             buckets[key] = {"size_label": label, "price": v["price"],
                             "in_stock": v["in_stock"], **extra}
     # Tri par taille croissante (gélules ou kg)
@@ -318,6 +332,27 @@ async def scrape_product(page, url: str, ptype: str) -> list:
 
         name = await page.evaluate("document.querySelector('h1')?.innerText?.trim() || ''")
 
+        # Tailles canoniques (boutons de sélection du site) — pour le whey, l'axe
+        # est le nb de PORTIONS (15/30/90/150). On lit le texte des boutons SANS
+        # cliquer (présents dans le HTML statique) pour écarter de la ld+json les
+        # éditions limitées mono-taille (8/21/64/83 portions) qui ne figurent pas
+        # dans le sélecteur. cf. dump : ld+json = 107 variantes tous arômes.
+        canon_portions = None
+        if ptype == "whey":
+            try:
+                await page.wait_for_selector("button.elements-variations-button", timeout=6_000)
+            except PlaywrightTimeout:
+                pass
+            btn_labels = await page.evaluate(
+                r"""() => Array.from(document.querySelectorAll('button.elements-variations-button'))
+                    .map(b => (b.innerText || '').trim()).filter(t => t)"""
+            )
+            canon_portions = {int(m.group(1)) for t in btn_labels
+                              if (m := PORTIONS_RE.search(t))}
+            if not canon_portions:
+                log_error(url, "Boutons de taille canoniques whey introuvables "
+                               "→ pas de restriction (risque de tailles parasites)", MP_CFG)
+
         # Variantes / prix / stock depuis la ld+json
         ld_raw = await page.evaluate(
             r"""() => Array.from(document.querySelectorAll("script[type='application/ld+json']"))
@@ -331,7 +366,7 @@ async def scrape_product(page, url: str, ptype: str) -> list:
                 continue
             graph = data.get("@graph", [data]) if isinstance(data, dict) else data
             nodes.extend(graph if isinstance(graph, list) else [graph])
-        variants = _group_by_size(_iter_variants(nodes), ptype)
+        variants = _group_by_size(_iter_variants(nodes), ptype, canon_portions)
 
         # Nutrition / ingrédients : 1× par produit (identiques sur toutes les tailles)
         await page.evaluate(_MP_EXPAND_JS)
@@ -364,7 +399,7 @@ async def scrape_product(page, url: str, ptype: str) -> list:
             short = url.rsplit("/", 2)[-2][:24]
             flag = "" if v["in_stock"] else " [OOS]"
             print(
-                f"    [{short:24s}] {v['size_label']:12} | {price:>7.2f} EUR | "
+                f"    [{short:24s}] {v['size_label']:22} | {price:>7.2f} EUR | "
                 f"PROT:{nutri['nutrition'].get('proteines_100g','-')}g | "
                 f"PXKG-PROT:{row.get('px_kg_proteine','-')}{flag}"
             )
