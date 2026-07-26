@@ -182,6 +182,39 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 - Edge-case oméga vegan (algues) : parfois DHA seul sans EPA → `_enrich_row`
   n'établit pas €/g EPA+DHA (best-effort, non bloquant).
 
+## Lignes fantômes dans `latest` (dashboard + recommandeur)
+
+- `generate_dashboard` et `_recommendation_data` gardent chacun un dict `latest`
+  keyé par `(produit, taille)` = dernière ligne vue. Un `(produit, taille)` qui
+  disparaît du scrape (au lieu d'être mis à jour) **reste affiché pour toujours**
+  avec un prix vieux de plusieurs semaines si rien ne le purge.
+- Deux causes observées en 2026-07 :
+  - **MyProtein** : le regroupement whey/oméga garde la variante (arôme) la moins
+    chère par bucket (portions/gélules) — le POIDS affiché dans `Taille` vient de
+    cette variante et peut changer de jour en jour (ex. "625g" → "600g" si un
+    autre arôme devient moins cher), sans que l'ancienne taille ne revienne
+    jamais. Repéré via Impact Whey Protein qui affichait un "625g / 22,19€" vieux
+    d'un mois à côté des tailles du jour.
+  - **HSN** : le nom produit change de casse/symbole ® côté site (ex.
+    `...DIGEZYME®)` → `...DigeZyme®)` le 2026-07-17, `MicelPure®`, `IFOS®`…) — la
+    clé `(produit, taille)` traite ça comme un **produit entièrement différent**,
+    donc l'ancien nom ne se met plus jamais à jour et pollue le dashboard/reco en
+    doublon.
+- **Fix** : `_prune_stale_sizes(latest)` (partagé par les deux fonctions) retire
+  toute ligne dont la date est en retard de plus de `STALE_SIZE_DAYS` (3) **par
+  rapport à la date la plus récente de TOUT le snapshot** — pas par rapport à la
+  dernière date du même nom de produit (un nom qui change de casse n'a par
+  définition aucune ligne "plus récente" sous son propre nom à comparer).
+
+## Recommandeur (`generate_recommendations`) — pas de textes hardcodés par site
+
+- La page reco est générée pour HSN **et** MyProtein via le même `cfg: SiteConfig`.
+  Ne jamais écrire "HSN"/"HSNstore" en dur dans le HTML/JS de
+  `generate_recommendations` — toujours passer par `cfg.brand` /
+  `cfg.site_domain` (champ ajouté pour l'eyebrow + le texte "mis à jour chaque
+  jour"). Bug réel trouvé 2026-07 : la page MyProtein affichait "Guide
+  indépendant · HSNstore.fr" et "les whey... de HSN au vrai coût" mot pour mot.
+
 ## Ne pas faire
 
 - Ne pas filtrer silencieusement des rows dans `generate_dashboard` sans un commentaire expliquant pourquoi (cf. l'incident px_kg/oméga).

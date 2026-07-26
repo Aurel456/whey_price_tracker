@@ -43,6 +43,7 @@ _HERE = Path(__file__).parent
 MP_CFG = SiteConfig(
     name="MyProtein",
     brand="MyProtein",
+    site_domain="MyProtein.com",
     excel_path=_HERE / "myprotein_prices.xlsx",
     error_log_path=_HERE / "myprotein_errors.log",
     dashboard_local="myprotein_dashboard.html",

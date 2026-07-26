@@ -44,6 +44,7 @@ ERROR_LOG_PATH   = Path(__file__).parent / "errors.log"
 class SiteConfig:
     name: str               # identifiant interne ("HSN", "MyProtein")
     brand: str              # libellé affiché dans les titres/H1 du dashboard
+    site_domain: str        # domaine affiché sur la page reco ("hsnstore.fr")
     excel_path: Path        # fichier historique des prix
     error_log_path: Path    # journal d'erreurs
     dashboard_local: str    # dashboard, ouverture locale (racine du repo)
@@ -60,6 +61,7 @@ class SiteConfig:
 HSN_CFG = SiteConfig(
     name="HSN",
     brand="HSN",
+    site_domain="HSNstore.fr",
     excel_path=EXCEL_PATH,
     error_log_path=ERROR_LOG_PATH,
     dashboard_local="whey_dashboard.html",
@@ -1025,6 +1027,45 @@ async def scrape_product(page, url: str) -> list:
 
 
 # ── Dashboard HTML ────────────────────────────────────────────────────────────
+STALE_SIZE_DAYS = 3
+
+
+def _prune_stale_sizes(latest: dict) -> None:
+    """Retire de `latest` (keyé par (produit, taille)) les lignes fantômes, par
+    rapport à la date de scrape la plus récente de TOUT le snapshot. Deux causes
+    observées :
+      - MyProtein : le regroupement whey/oméga garde la variante (arôme) la moins
+        chère par bucket (portions/gélules), et le POIDS affiché dans `Taille`
+        vient de cette variante — une taille comme "625g" peut donc disparaître
+        du jour au lendemain (arôme retiré, bucket gagné par un autre poids) sans
+        jamais revenir.
+      - HSN : le nom produit change parfois de casse/symbole ® côté site (ex.
+        "...DIGEZYME®)" → "...DigeZyme®)" le 2026-07-17), ce qui crée un nouveau
+        `produit` du point de vue de la clé — l'ancien nom n'est alors plus jamais
+        réécrit et resterait affiché indéfiniment comme un "produit" à part avec
+        un prix vieux de plusieurs semaines.
+    Dans les deux cas, la ligne n'est jamais mise à jour mais reste dans `latest`
+    pour toujours si on ne compare qu'à elle-même. On la compare donc à la date la
+    PLUS RÉCENTE du snapshot entier (et pas seulement à celle de son propre nom de
+    produit) : un produit encore réellement vendu est re-scrapé chaque jour comme
+    les autres, donc sa date suit le global — seules les vraies lignes mortes
+    (taille disparue, ancien nom remplacé) prennent du retard. Modifie `latest`
+    en place."""
+    global_max_date = max((str(r.get("Date", "")) for r in latest.values()), default="")
+    if not global_max_date:
+        return
+    for key in list(latest):
+        row_date = str(latest[key].get("Date", ""))
+        if not row_date:
+            continue
+        try:
+            stale = (date.fromisoformat(global_max_date) - date.fromisoformat(row_date)).days > STALE_SIZE_DAYS
+        except ValueError:
+            stale = False
+        if stale:
+            del latest[key]
+
+
 def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
     """Regenerate whey_dashboard.html from current Excel data (or provided rows)."""
     if rows is None:
@@ -1063,30 +1104,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         if key not in latest or rdate >= str(latest[key].get("Date", "")):
             latest[key] = r
 
-    # Purge les tailles fantômes : sur MyProtein, le regroupement whey/oméga garde
-    # la variante (arôme) la moins chère par bucket (portions/gélules), et le POIDS
-    # affiché dans `Taille` vient de cette variante — donc une taille comme "625g"
-    # peut disparaître définitivement du jour au lendemain (arôme retiré, bucket
-    # gagné par un autre poids) sans jamais revenir. Comme `latest` est keyé par
-    # (produit, taille), la ligne fantôme restait sinon affichée indéfiniment avec
-    # un prix vieux de plusieurs semaines. On ne garde une taille que si elle a été
-    # revue récemment par rapport à la dernière date de scrape de CE produit.
-    STALE_SIZE_DAYS = 3
-    product_max_date = {}
-    for (produit, _taille), r in latest.items():
-        d = str(r.get("Date", ""))
-        if d and d > product_max_date.get(produit, ""):
-            product_max_date[produit] = d
-    for key in list(latest):
-        produit, _taille = key
-        row_date, max_date = str(latest[key].get("Date", "")), product_max_date.get(produit, "")
-        if row_date and max_date:
-            try:
-                stale = (date.fromisoformat(max_date) - date.fromisoformat(row_date)).days > STALE_SIZE_DAYS
-            except ValueError:
-                stale = False
-            if stale:
-                del latest[key]
+    _prune_stale_sizes(latest)
 
     # Calcule moyenne historique (hors dernière date) + flag deal
     deal_meta = {}
@@ -2397,6 +2415,8 @@ def _recommendation_data(rows: list) -> list:
         if key not in latest or rdate >= str(latest[key].get("Date", "")):
             latest[key] = r
 
+    _prune_stale_sizes(latest)
+
     deal = {}
     for key, hist in history_by_key.items():
         hist.sort(key=lambda x: x["date"])
@@ -2723,7 +2743,7 @@ renderCats();renderCrit();renderOut();
         ("🐟", "Oméga-3 : concentration + pureté",
          "Vise une <b>concentration ≥ 50 %</b> d'EPA+DHA par capsule (pas juste « 1000 mg d'huile »). Et la certification <b>IFOS</b> garantit une oxydation (TOTOX) et des contaminants sous contrôle, lot par lot. Le recommandeur filtre sur ces deux critères."),
         ("📅", "Mis à jour chaque jour",
-         "Les prix sont relevés automatiquement sur HSNstore chaque matin. Le badge « prix en baisse » signale les produits passés sous leur moyenne récente — pratique pour saisir une promo."),
+         f"Les prix sont relevés automatiquement sur {cfg.site_domain} chaque matin. Le badge « prix en baisse » signale les produits passés sous leur moyenne récente — pratique pour saisir une promo."),
     ]
     edu_html = "".join(
         f"<div class='edu-card'><div class='ico'>{ico}</div><h4>{title}</h4><p>{body}</p></div>"
@@ -2751,9 +2771,9 @@ renderCats();renderCrit();renderOut();
         f"<style>{RECO_CSS}</style>\n</head>\n<body>\n"
         # Hero
         "<header class='hero'><div class='wrap'>"
-        "<span class='eyebrow'>Guide indépendant · HSNstore.fr</span>"
+        f"<span class='eyebrow'>Guide indépendant · {cfg.site_domain}</span>"
         "<h1>Quelle protéine acheter,<br>au meilleur prix ?</h1>"
-        "<p class='lead'>On compare pour toi les whey, oméga-3 et créatines de HSN au vrai coût — "
+        f"<p class='lead'>On compare pour toi les whey, oméga-3 et créatines de {cfg.brand} au vrai coût — "
         "celui de la protéine et des actifs, pas juste le prix affiché. Mis à jour chaque jour.</p>"
         "<div class='stats'>"
         f"<div class='stat'><b>{n_products}</b><span>produits suivis</span></div>"
