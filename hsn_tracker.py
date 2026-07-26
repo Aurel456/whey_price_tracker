@@ -554,11 +554,27 @@ def _detect_whey_type(ingredients: str, name: str) -> list:
         out.append("native")
     if "caséine" in combined or "caseine" in combined or "peptopro" in combined:
         out.append("caseine")
-    # Végétal : soja / pois / riz / chanvre / vegan
+    # Végétal : soja / pois / riz / chanvre / avoine / vegan. La protéine de riz
+    # est une source végétale à part entière (ex. "CONCENTRÉ DE PROTÉINES DE RIZ
+    # COMPLET") → on détecte la mention explicite "protéine(s) de riz" / "rice
+    # protein" / "riz complet", sans confondre avec la "crème de riz" (glucides).
+    # "soja" seul est trop large : la "lécithine de soja" est un simple émulsifiant
+    # (ex. Impact Whey Protein, base lactosérum) et ne doit PAS taguer le produit
+    # comme végétal — on exige une mention explicite de protéine de soja.
+    has_soy_protein = (
+        "protéine de soja" in combined or "protéines de soja" in combined
+        or "proteine de soja" in combined or "proteines de soja" in combined
+        or "isolat de soja" in combined or "soy protein" in combined
+        or "soja texturé" in combined
+    )
     if (
-        "soja" in s or "vegan" in name_l or "vegan" in s
-        or "pois" in s or "chanvre" in s
-        or "riz" in s and "crème de riz" in name_l
+        has_soy_protein or "vegan" in combined or "végan" in combined
+        or "pois" in s or "chanvre" in combined
+        or "protéine de pois" in combined or "protéines de pois" in combined
+        or "pea protein" in combined
+        or "protéine de riz" in combined or "protéines de riz" in combined
+        or "protein de riz" in combined or "rice protein" in combined
+        or "riz complet" in combined
     ):
         out.append("vegetal")
     if "concentré" in combined or "concentrate" in combined or "concentree" in combined:
@@ -792,10 +808,12 @@ def _enrich_row(row: dict, nutri: dict, ptype: str = None) -> dict:
 
     elif ptype == "omega3":
         # €/g d'EPA+DHA = prix / (capsules_pack × (EPA+DHA mg/cap) / 1000)
+        # Les oméga vegan (algues) n'ont parfois que du DHA (pas d'EPA) → on calcule
+        # quand même la métrique avec ce qui est présent pour ne pas les exclure.
         caps = _parse_size_caps(row.get("size", ""))
-        epa = n.get("epa_mg_dose")
+        epa = n.get("epa_mg_dose") or 0
         dha = n.get("dha_mg_dose") or 0
-        if epa is not None and caps and price:
+        if (epa or dha) and caps and price:
             total_g = caps * (epa + dha) / 1000.0
             if total_g > 0:
                 row["cout_g_epa_dha"] = round(price / total_g, 3)
@@ -1044,6 +1062,31 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         })
         if key not in latest or rdate >= str(latest[key].get("Date", "")):
             latest[key] = r
+
+    # Purge les tailles fantômes : sur MyProtein, le regroupement whey/oméga garde
+    # la variante (arôme) la moins chère par bucket (portions/gélules), et le POIDS
+    # affiché dans `Taille` vient de cette variante — donc une taille comme "625g"
+    # peut disparaître définitivement du jour au lendemain (arôme retiré, bucket
+    # gagné par un autre poids) sans jamais revenir. Comme `latest` est keyé par
+    # (produit, taille), la ligne fantôme restait sinon affichée indéfiniment avec
+    # un prix vieux de plusieurs semaines. On ne garde une taille que si elle a été
+    # revue récemment par rapport à la dernière date de scrape de CE produit.
+    STALE_SIZE_DAYS = 3
+    product_max_date = {}
+    for (produit, _taille), r in latest.items():
+        d = str(r.get("Date", ""))
+        if d and d > product_max_date.get(produit, ""):
+            product_max_date[produit] = d
+    for key in list(latest):
+        produit, _taille = key
+        row_date, max_date = str(latest[key].get("Date", "")), product_max_date.get(produit, "")
+        if row_date and max_date:
+            try:
+                stale = (date.fromisoformat(max_date) - date.fromisoformat(row_date)).days > STALE_SIZE_DAYS
+            except ValueError:
+                stale = False
+            if stale:
+                del latest[key]
 
     # Calcule moyenne historique (hors dernière date) + flag deal
     deal_meta = {}

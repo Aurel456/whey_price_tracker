@@ -69,6 +69,7 @@ PRODUCTS = [
     # Oméga-3
     ("https://fr.myprotein.com/p/nutrition-sportive/omega-3-en-gelules/10529329/", "omega3"),
     ("https://fr.myprotein.com/p/nutrition-sportive/omegas-3-vegans/13633515/", "omega3"),
+    ("https://fr.myprotein.com/p/nutrition-sportive/omega-3-plus-vegan/11447800/", "omega3"),
 ]
 
 PAGE_TIMEOUT = 45_000
@@ -138,7 +139,7 @@ def _iter_variants(ld_nodes: list):
     return out
 
 
-def _group_by_size(variants: list, ptype: str, canon_portions=None) -> list:
+def _group_by_size(variants: list, ptype: str, canon_portions=None, canon_caps=None) -> list:
     """Regroupe les variantes par taille (une ligne par taille réelle).
 
     Une déclinaison MyProtein = taille × arôme (jusqu'à 100). On dédoublonne en
@@ -152,7 +153,9 @@ def _group_by_size(variants: list, ptype: str, canon_portions=None) -> list:
         mono-taille (8/20/21/32/64/83 portions) qui polluaient le dashboard.
       - créatine : les arômes ajoutent des charges → les portions varient à poids
         égal, mais le POIDS est fixe → clé = poids.
-      - oméga-3 : clé = nb de gélules.
+      - oméga-3 : clé = nb de gélules. Si le nom ld+json ne porte pas le nb de
+        gélules (ex. "Oméga-3 Plus végan" = 1 offre sans count), on retombe sur le
+        bouton DOM unique (`canon_caps`).
     Le poids net affiché vient de la variante représentative retenue.
     Renvoie [{size_label, size_kg|caps, price, in_stock}].
     """
@@ -163,7 +166,11 @@ def _group_by_size(variants: list, ptype: str, canon_portions=None) -> list:
         if ptype == "omega3":
             caps = _parse_size_caps(v["name"])
             if not caps:
-                continue
+                # ld+json sans nb de gélules → fallback bouton DOM (cas mono-taille)
+                if canon_caps and len(set(canon_caps)) == 1:
+                    caps = canon_caps[0]
+                else:
+                    continue
             key, extra = ("caps", caps), {"caps": caps}
         else:
             kg = _weight_to_kg(v["name"])
@@ -337,8 +344,8 @@ async def scrape_product(page, url: str, ptype: str) -> list:
         # cliquer (présents dans le HTML statique) pour écarter de la ld+json les
         # éditions limitées mono-taille (8/21/64/83 portions) qui ne figurent pas
         # dans le sélecteur. cf. dump : ld+json = 107 variantes tous arômes.
-        canon_portions = None
-        if ptype == "whey":
+        canon_portions = canon_caps = None
+        if ptype in ("whey", "omega3"):
             try:
                 await page.wait_for_selector("button.elements-variations-button", timeout=6_000)
             except PlaywrightTimeout:
@@ -347,11 +354,14 @@ async def scrape_product(page, url: str, ptype: str) -> list:
                 r"""() => Array.from(document.querySelectorAll('button.elements-variations-button'))
                     .map(b => (b.innerText || '').trim()).filter(t => t)"""
             )
-            canon_portions = {int(m.group(1)) for t in btn_labels
-                              if (m := PORTIONS_RE.search(t))}
-            if not canon_portions:
-                log_error(url, "Boutons de taille canoniques whey introuvables "
-                               "→ pas de restriction (risque de tailles parasites)", MP_CFG)
+            if ptype == "whey":
+                canon_portions = {int(m.group(1)) for t in btn_labels
+                                  if (m := PORTIONS_RE.search(t))}
+                if not canon_portions:
+                    log_error(url, "Boutons de taille canoniques whey introuvables "
+                                   "→ pas de restriction (risque de tailles parasites)", MP_CFG)
+            else:  # omega3 : fallback nb de gélules quand absent de la ld+json
+                canon_caps = [c for t in btn_labels if (c := _parse_size_caps(t))]
 
         # Variantes / prix / stock depuis la ld+json
         ld_raw = await page.evaluate(
@@ -366,7 +376,7 @@ async def scrape_product(page, url: str, ptype: str) -> list:
                 continue
             graph = data.get("@graph", [data]) if isinstance(data, dict) else data
             nodes.extend(graph if isinstance(graph, list) else [graph])
-        variants = _group_by_size(_iter_variants(nodes), ptype, canon_portions)
+        variants = _group_by_size(_iter_variants(nodes), ptype, canon_portions, canon_caps)
 
         # Nutrition / ingrédients : 1× par produit (identiques sur toutes les tailles)
         await page.evaluate(_MP_EXPAND_JS)
