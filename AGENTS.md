@@ -93,7 +93,9 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 
 - `generate_recommendations(rows, cfg)` est appelée en fin de `generate_dashboard()`. Elle écrit `docs/<cfg.reco_docs>` (`hsn.html` / `myprotein.html`). Les liens vers le dashboard et l'accueil passent par les tokens `__DASHBOARD_HREF__` et `__COMPARATIF_HREF__`.
 - `_recommendation_data(rows)` calcule, par item du dernier snapshot : `concentration` (oméga = (EPA+DHA mg/cap)/poids capsule, poids lu dans le nom via `_omega_cap_mg`), `ifos`/`tg` (oméga), `creapure`/`monohydrate` (créatine), `wheyTier` (`_whey_tier`), `sansEdulcorant`, et `badges` (`_reco_badges`).
-- **Gammes whey** (`_whey_tier`) : Vegan (vegetal) / Supérieure (isolat_cfm ou native) / Basique (isolat, concentre, hydrolysat) / Autre. Hydrolysat = Basique (choix produit).
+- **Gammes whey** (`_whey_tier`) : Vegan (vegetal) / Supérieure (isolat_cfm ou native) / Basique (isolat, concentre, hydrolysat, **caseine**) / Autre. Hydrolysat ET caséine = Basique (choix produit) : « Supérieure » est réservé à un procédé réellement premium (CFM à froid, protéine native), une caséine micellaire reste une caséine standard.
+- **Détection `native` : frontière de mot obligatoire.** `"native" in combined` matchait la sous-chaîne dans des noms de gamme (`EVONATIVE CASEIN Lacprodan® MicelPure™` → tagué `native` → gamme Supérieure à tort, signalé par l'utilisateur 2026-07). Utiliser `re.search(r"\bnati(?:ve|fs?)\b", …)`. Se méfier de la même classe de bug sur les autres mots-clés courts noyés dans des noms de marque.
+- **Caséine : détecter `casein` (sans e).** Les noms HSN sont parfois en anglais (`EVONATIVE CASEIN`) — `"caseine"`/`"caséine"` seuls rataient le produit entièrement.
 - **Critère qualité oméga = IFOS + concentration**, PAS de TOTOX chiffré (il est dans les rapports IFOS PDF par lot, pas sur les pages produit — vérifié 2026-06). Ne pas tenter de scraper le TOTOX.
 - Le recommandeur est du **JS embarqué** : `ITEMS` (JSON des items en stock avec métrique), filtré par `matchItem()` selon `crit[cat]`, trié par métrique croissante. Les whey embarquées sont restreintes à `categorie=="Whey"` (≥70 %) pour exclure les aliments enrichis.
 - Après modif de la logique de critères, **toujours re-tester dans Playwright** que les défauts oméga (≥50 % + IFOS) sortent bien *ULTRA OMEGA-3 TG* et pas l'huile de poisson basique.
@@ -218,6 +220,19 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
   (fin de `main`) et pas depuis `hsn_tracker.py` : c'est le seul module qui
   connaît les deux configs sans créer d'import circulaire. Conséquence : lancer
   `hsn_tracker.py` seul ne régénère PAS l'accueil.
+- **Seuil d'égalité (`TIE_PCT`, 3 %)** : sous cet écart, aucune catégorie n'a de
+  gagnant (badge « ≈ Prix équivalent »). Sans ça, un écart de **1 centime** sur la
+  créatine (25,49 € vs 25,50 €) suffisait à faire écrire « aucun site n'est le
+  moins cher partout » alors qu'un site était devant partout où l'écart était
+  réel — signalé par l'utilisateur, à juste titre.
+- **Le constat n°1 de la section étude est calculé, jamais écrit d'avance** :
+  trois formulations selon les données (un seul site devant / plusieurs sites se
+  partagent / tout est à égalité). Ne pas re-hardcoder une conclusion : les prix
+  bougent énormément (le 2026-07-27, la créatine HSN 1 kg est passée de 25,50 € à
+  13,43 €, faisant basculer le classement sur les 3 catégories en un jour).
+- **Blurbs marchands** (`SITE_BLURBS`, keyés par `SiteConfig.name`) : factuel et
+  vérifiable uniquement (pays, positionnement, ce qui est publié sur les fiches).
+  Pas de superlatif commercial — la page est un comparatif indépendant.
 - **Honnêteté du match whey** : le meilleur rapport d'un site peut être une
   protéine végétale (soja/pois, structurellement moins chère au kg de protéine)
   face à une whey laitière chez l'autre. Le flag `mixed` détecte ce cas, affiche

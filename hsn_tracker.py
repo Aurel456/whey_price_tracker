@@ -550,9 +550,15 @@ def _detect_whey_type(ingredients: str, name: str) -> list:
         out.append("isolat_cfm")
     if "hydrolys" in combined:
         out.append("hydrolysat")
-    if "native" in combined or "natif" in combined:
+    # Frontière de mot obligatoire : "native" en sous-chaîne matche des noms de
+    # gamme qui n'ont rien à voir (ex. "EVONATIVE CASEIN LACPRODAN MICELPURE",
+    # une caséine micellaire, était taguée `native` → gamme Supérieure à tort).
+    if re.search(r"\bnati(?:ve|fs?)\b", combined) or re.search(r"\bnatives\b", combined):
         out.append("native")
-    if "caséine" in combined or "caseine" in combined or "peptopro" in combined:
+    # "casein" couvre l'anglais et le français sans accent ; "caséine" a l'accent.
+    # Sans la forme courte, "EVONATIVE CASEIN (Lacprodan® MicelPure™)" n'était pas
+    # reconnu comme caséine du tout.
+    if "casein" in combined or "caséine" in combined or "peptopro" in combined:
         out.append("caseine")
     # Végétal : soja / pois / riz / chanvre / avoine / vegan. La protéine de riz
     # est une source végétale à part entière (ex. "CONCENTRÉ DE PROTÉINES DE RIZ
@@ -2373,13 +2379,18 @@ def _omega_cap_mg(name: str) -> float:
 
 
 def _whey_tier(whey_types: list) -> str:
-    """Gamme protéine — Vegan / Supérieure (CFM·Native) / Basique (isolat·WPC·hydrolysat) / Autre.
-    Hydrolysat classé en Basique (choix produit validé)."""
+    """Gamme protéine — Vegan / Supérieure (CFM·Native) / Basique / Autre.
+
+    « Supérieure » est réservé à un procédé d'extraction réellement premium :
+    isolat CFM (microfiltration à froid) ou protéine native. Hydrolysat et
+    caséine sont en Basique (choix produit validé) : une caséine micellaire
+    reste une caséine standard, pas une protéine haut de gamme."""
     if "vegetal" in whey_types:
         return "vegan"
     if "isolat_cfm" in whey_types or "native" in whey_types:
         return "superieure"
-    if "isolat" in whey_types or "concentre" in whey_types or "hydrolysat" in whey_types:
+    if ("isolat" in whey_types or "concentre" in whey_types
+            or "hydrolysat" in whey_types or "caseine" in whey_types):
         return "basique"
     return "autre"
 
@@ -2865,6 +2876,23 @@ renderCats();renderCrit();renderOut();
 # les pages reco par site sont un cran plus loin (docs/hsn.html, myprotein.html).
 COMPARATIF_DOCS = "index.html"
 
+# En dessous de cet écart (%), deux sites sont considérés à égalité sur une
+# catégorie : l'écart est dans le bruit (arrondis, promo d'un jour) et n'a aucune
+# valeur de conseil.
+TIE_PCT = 3
+
+# Présentation courte de chaque marchand, par `SiteConfig.name`. Factuel et
+# vérifiable uniquement (pays, positionnement, ce qui est publié sur les fiches) —
+# la page se veut un comparatif indépendant, pas une page de promotion.
+SITE_BLURBS = {
+    "HSN": "Marchand espagnol qui fabrique ses propres gammes (Sport Series, Raw Series, "
+           "Essential Series). Fiches produit détaillées : profil d'acides aminés complet, "
+           "origine des matières premières, certifications (IFOS sur les oméga-3).",
+    "MyProtein": "Marque britannique du groupe THG, l'une des plus connues d'Europe. Catalogue "
+                 "très large et prix affichés souvent barrés par des promotions permanentes, "
+                 "ce qui rend le coût réel difficile à évaluer sans le recalculer.",
+}
+
 # S'ajoute à RECO_CSS (variables, hero, chips, edu-grid, footer déjà définis là).
 COMPARATIF_CSS = """
 .vs-block{background:var(--card);border:1px solid #e7ebf0;border-radius:20px;padding:24px;margin-bottom:20px;}
@@ -2877,6 +2905,8 @@ COMPARATIF_CSS = """
 .vs-site{display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:800;font-size:15px;margin-bottom:10px;}
 .vs-win{font-size:10px;font-weight:800;background:#e7f6ee;color:#1d7150;padding:3px 9px;border-radius:20px;letter-spacing:.3px;}
 .vs-lose{font-size:10px;font-weight:800;background:#f4f5f7;color:#8a94a6;padding:3px 9px;border-radius:20px;}
+.vs-tie{font-size:10px;font-weight:800;background:#eef2f8;color:#4a5568;padding:3px 9px;border-radius:20px;}
+.site-blurb{color:var(--muted);font-size:13.5px;margin-top:12px;line-height:1.5;}
 .vs-metric{font-size:28px;font-weight:800;letter-spacing:-1px;line-height:1.15;}
 .vs-metric small{font-size:12px;font-weight:500;color:var(--muted);letter-spacing:0;}
 .vs-card h4{font-size:15px;font-weight:700;margin:12px 0 3px;line-height:1.35;}
@@ -2964,8 +2994,12 @@ def generate_comparatif(sites: list) -> None:
         # (ex. isolat de soja vs whey concentrée) — l'écart chiffré n'est alors pas
         # un écart de prix « à produit comparable ».
         mixed = kind == "whey" and len({e["it"].get("wheyTier") for e in entries}) > 1
+        # `tie` : sous TIE_PCT, l'écart n'est pas un vrai avantage (observé : 25,49 €
+        # vs 25,50 € sur la créatine = 1 centime). Annoncer un « gagnant » là-dessus
+        # fausse complètement la lecture — on affiche une égalité.
+        tie = ecart is not None and ecart < TIE_PCT
         matches.append({"kind": kind, "meta": k, "entries": entries,
-                        "ecart": ecart, "mixed": mixed})
+                        "ecart": ecart, "mixed": mixed, "tie": tie})
 
     def build() -> str:
         def reco_href(cfg):
@@ -2981,11 +3015,17 @@ def generate_comparatif(sites: list) -> None:
             cards = ""
             for rank, e in enumerate(m["entries"]):
                 it, cfg_e = e["it"], e["site"]
-                win = rank == 0 and len(m["entries"]) > 1
-                badge = ("<span class='vs-win'>🏆 Le moins cher</span>" if win
-                         else ("<span class='vs-lose'>+{}%</span>".format(
-                               round((e['m'] - m['entries'][0]['m']) / m['entries'][0]['m'] * 100))
-                               if len(m["entries"]) > 1 and m["entries"][0]["m"] else ""))
+                multi = len(m["entries"]) > 1
+                win = rank == 0 and multi and not m["tie"]
+                if m["tie"]:
+                    badge = "<span class='vs-tie'>≈ Prix équivalent</span>" if multi else ""
+                elif win:
+                    badge = "<span class='vs-win'>🏆 Le moins cher</span>"
+                elif multi and m["entries"][0]["m"]:
+                    badge = "<span class='vs-lose'>+{}%</span>".format(
+                        round((e["m"] - m["entries"][0]["m"]) / m["entries"][0]["m"] * 100))
+                else:
+                    badge = ""
                 chips_html = "".join(
                     "<span class='chip chip-{}'>{}</span>".format(_esc(b[1]), _esc(b[0]))
                     for b in it.get("badges", [])
@@ -3007,7 +3047,12 @@ def generate_comparatif(sites: list) -> None:
             # serait alors trompeur — on le dit explicitement plutôt que de le taire.
             mixed = m["mixed"]
             ecart_line = ""
-            if m["ecart"]:
+            if m["tie"]:
+                ecart_line = (
+                    "<div class='vs-ecart'>Les deux sites sont au même prix sur cette catégorie "
+                    f"(moins de {TIE_PCT} % d'écart) : le choix se fait sur autre chose que le prix.</div>"
+                )
+            elif m["ecart"]:
                 ecart_line = (
                     "<div class='vs-ecart'>Écart entre le meilleur et le moins bon des sites comparés : "
                     f"<b>{m['ecart']} %</b> sur la même métrique."
@@ -3025,20 +3070,44 @@ def generate_comparatif(sites: list) -> None:
             )
 
         # ── Ce que dit l'étude (constats calculés, pas de texte inventé)
+        # Constat n°1 : on ne présuppose pas le résultat. Les catégories où l'écart
+        # est dans le bruit (`tie`) ne comptent pour personne — sinon un centime
+        # d'écart sur la créatine suffisait à écrire « aucun site n'est le moins
+        # cher partout » alors que le même site est devant partout où l'écart est
+        # réel. Le texte s'adapte aux trois cas possibles.
+        decided = [m for m in matches if len(m["entries"]) > 1 and not m["tie"]]
         wins = {}
-        for m in matches:
-            if len(m["entries"]) > 1:
-                wins[m["entries"][0]["site"].brand] = wins.get(m["entries"][0]["site"].brand, 0) + 1
-        win_line = " · ".join(f"<b>{_esc(b)}</b> gagne {n} catégorie{'s' if n > 1 else ''}"
-                              for b, n in sorted(wins.items(), key=lambda x: -x[1])) or "Un seul site comparable pour l'instant."
+        for m in decided:
+            b = m["entries"][0]["site"].brand
+            wins[b] = wins.get(b, 0) + 1
+        n_tie = sum(1 for m in matches if m["tie"])
+        tie_txt = (f" Sur {n_tie} autre{'s' if n_tie > 1 else ''} catégorie"
+                   f"{'s' if n_tie > 1 else ''}, les prix sont équivalents "
+                   f"(moins de {TIE_PCT} % d'écart).") if n_tie else ""
+        if len(wins) == 1 and decided:
+            brand, n = next(iter(wins.items()))
+            head1 = f"{brand} est devant partout où l'écart est réel"
+            body1 = (f"Sur le dernier relevé, <b>{_esc(brand)}</b> offre le meilleur coût réel sur "
+                     f"{n} catégorie{'s' if n > 1 else ''} sur {len(matches)}.{tie_txt} "
+                     "Ça ne vaut que pour aujourd'hui : les prix sont relevés chaque matin et "
+                     "l'écart peut se resserrer d'un mois à l'autre.")
+        elif len(wins) > 1:
+            win_line = " · ".join(f"<b>{_esc(b)}</b> sur {n} catégorie{'s' if n > 1 else ''}"
+                                  for b, n in sorted(wins.items(), key=lambda x: -x[1]))
+            head1 = "Aucun site n'est le moins cher partout"
+            body1 = (f"Sur le dernier relevé : {win_line}.{tie_txt} Choisir « son » site une fois "
+                     "pour toutes coûte de l'argent — le bon réflexe est de comparer par catégorie.")
+        else:
+            head1 = "Des prix très proches d'un site à l'autre"
+            body1 = ("Sur le dernier relevé, aucun site ne se détache : les écarts restent sous "
+                     f"{TIE_PCT} %.{tie_txt} Le choix se joue alors sur la gamme et la transparence "
+                     "des fiches produit, pas sur le prix.")
         # On ne met en avant que les écarts « à gamme comparable » : annoncer 241 %
         # alors que l'écart vient d'un soja opposé à une whey serait malhonnête.
         max_ecart = max((m["ecart"] or 0 for m in matches if not m["mixed"]), default=0)
         n_deals = sum(1 for s in snaps for it in s["items"] if it.get("isDeal"))
         findings = [
-            ("🏁", "Aucun site n'est le moins cher partout",
-             f"Sur le dernier relevé : {win_line}. Choisir « son » site une fois pour toutes coûte de l'argent — "
-             "le bon réflexe est de comparer par catégorie de produit."),
+            ("🏁", head1, body1),
             ("📉", f"Jusqu'à {max_ecart} % d'écart sur un même besoin",
              "À gamme et métrique comparables, l'écart entre le meilleur et le moins bon site du comparatif "
              f"atteint {max_ecart} %. C'est bien plus que ce qu'un code promo fait gagner — "
@@ -3059,6 +3128,7 @@ def generate_comparatif(sites: list) -> None:
         site_cards = "".join(
             f"<div class='site-card'><h3>{_esc(s['cfg'].brand)}</h3>"
             f"<div class='vs-sub'>{_esc(s['cfg'].site_domain)} · {s['n_produits']} produits suivis</div>"
+            f"<p class='site-blurb'>{_esc(SITE_BLURBS.get(s['cfg'].name, ''))}</p>"
             f"<div class='site-links'><a class='cta sm' href='{reco_href(s['cfg'])}'>Recommandations</a>"
             f"<a class='cta sm ghost' href='{dash_href(s['cfg'])}'>Dashboard &amp; graphiques</a></div></div>"
             for s in snaps
