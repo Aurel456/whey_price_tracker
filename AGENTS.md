@@ -85,13 +85,13 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 1. Si tu touches au schéma Excel → vérifie `HEADERS`, `COL_WIDTHS`, `append_rows` (3 endroits).
 2. Si tu touches au dashboard → regen via `from hsn_tracker import generate_dashboard; generate_dashboard()` à chaque itération. Pas besoin de rescrap.
 3. Si tu touches au scraping → test ciblé sur 1-2 URLs avant de lancer le full scrape (cf. les helpers ponctuels supprimés `_test_new_urls.py`).
-4. **Toujours regen le dashboard** après modif data ou JS, sinon le HTML qui est versionné reflète l'ancien état. `generate_dashboard()` écrit le dashboard dans `whey_dashboard.html` (racine, local) **et** `docs/dashboard.html` (Pages), puis appelle `generate_recommendations()` qui écrit `recommandations.html` (racine) + `docs/index.html` (**accueil Pages = reco**). Tous committés ensemble — le workflow le fait déjà.
-   - **Landing page** : sur GitHub Pages, `docs/index.html` = page recommandations (grand public), `docs/dashboard.html` = dashboard technique. **4 fichiers HTML générés au total, pas plus** (2 racine + 2 docs). Les liens croisés passent par des tokens remplacés selon la destination : `__DASHBOARD_HREF__` côté reco (`whey_dashboard.html` en local, `dashboard.html` sur Pages) et `__RECO_HREF__` côté dashboard (`recommandations.html` en local, `index.html` sur Pages). Ne PAS réintroduire de `docs/recommandations.html` (ancien doublon supprimé).
+4. **Toujours regen le dashboard** après modif data ou JS, sinon le HTML qui est versionné reflète l'ancien état. `generate_dashboard(cfg)` écrit `docs/<dashboard_docs>` puis appelle `generate_recommendations()` qui écrit `docs/<reco_docs>`. L'accueil (`docs/index.html`) vient de `generate_comparatif()`, à relancer à part. Le workflow committe tout `docs/`.
+   - **Landing page** : cf. la section « Page d'accueil = comparatif multi-sites » plus bas pour la liste exacte des fichiers générés.
 5. **À la fin de chaque phase d'implémentation, proposer un `git commit -m "..."` rapide** avec un message court qui résume les changements. Ne pas commit soi-même sans validation — juste afficher la commande au user pour qu'il valide / ajuste.
 
 ## Page recommandations (recommandeur interactif)
 
-- `generate_recommendations(rows)` est appelée en fin de `generate_dashboard()`. Elle écrit `recommandations.html` (racine) + `docs/recommandations.html`. Le lien vers le dashboard diffère par destination (`whey_dashboard.html` vs `index.html`) via le token `__DASHBOARD_HREF__`.
+- `generate_recommendations(rows, cfg)` est appelée en fin de `generate_dashboard()`. Elle écrit `docs/<cfg.reco_docs>` (`hsn.html` / `myprotein.html`). Les liens vers le dashboard et l'accueil passent par les tokens `__DASHBOARD_HREF__` et `__COMPARATIF_HREF__`.
 - `_recommendation_data(rows)` calcule, par item du dernier snapshot : `concentration` (oméga = (EPA+DHA mg/cap)/poids capsule, poids lu dans le nom via `_omega_cap_mg`), `ifos`/`tg` (oméga), `creapure`/`monohydrate` (créatine), `wheyTier` (`_whey_tier`), `sansEdulcorant`, et `badges` (`_reco_badges`).
 - **Gammes whey** (`_whey_tier`) : Vegan (vegetal) / Supérieure (isolat_cfm ou native) / Basique (isolat, concentre, hydrolysat) / Autre. Hydrolysat = Basique (choix produit).
 - **Critère qualité oméga = IFOS + concentration**, PAS de TOTOX chiffré (il est dans les rapports IFOS PDF par lot, pas sur les pages produit — vérifié 2026-06). Ne pas tenter de scraper le TOTOX.
@@ -173,6 +173,25 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
     mappent pas sur les poids ld+json — ne pas tenter de les croiser).
   - **oméga** : clé = nb de gélules.
   On garde la variante la moins chère en stock par bucket.
+- **Fallback poids sur les protéines végétales** (2026-07) : `isolat-de-proteine-de-soja`,
+  `proteine-vegan-impact` (et d'autres) n'exposent **que des poids** dans la
+  ld+json — aucun nom de variante ne porte de portions. Le regroupement whey par
+  portions les jetait toutes (`continue`) → **0 ligne, produit totalement
+  invisible et silencieux**. `_group_by_size` calcule donc `whey_by_weight` en
+  amont de la boucle : si AUCUNE variante du produit n'expose de portions, on
+  bascule sur le poids comme clé (comme la créatine), libellé compris. Décision
+  **par produit**, jamais par variante : si le produit expose des portions, une
+  variante isolée sans portions reste une variante non standard à écarter.
+- Symptôme à connaître : un produit qui renvoie 0 ligne sans erreur bruyante est
+  presque toujours un problème de **clé de regroupement**, pas de scraping. Le
+  réflexe est de dumper `_iter_variants(nodes)` et de regarder si les noms
+  portent des portions, un poids, ou des gélules.
+- Les libellés de taille MyProtein **changent côté site sans préavis** : le
+  2026-07-27, les noms de variantes Impact Whey ont commencé à inclure
+  « - 30portions », ce qui a fait basculer le produit du poids vers les portions
+  du jour au lendemain. Ça crée une génération de lignes fantômes (ancien
+  libellé), résorbée automatiquement par `_activity_status` en 3 jours. Ne pas
+  s'en alarmer, ne pas « réparer » l'historique.
 - **Nutrition** : dans un accordéon (à **déplier** avant lecture, sinon `innerText`
   vide). Table à colonnes `Pour 100 g` / `Par portion` — ordre **inverse** de HSN
   (où col[2]=100g) → extracteur dédié `_parse_mp_nutrition` qui lit par **en-tête
@@ -181,6 +200,49 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 - **Pas de profil d'acides aminés** publié → €/3g leucine vide pour MyProtein.
 - Edge-case oméga vegan (algues) : parfois DHA seul sans EPA → `_enrich_row`
   n'établit pas €/g EPA+DHA (best-effort, non bloquant).
+
+## Page d'accueil = comparatif multi-sites
+
+- **5 fichiers HTML générés, tous dans `docs/`** : `index.html` (**accueil** =
+  comparatif HSN vs MyProtein), `hsn.html` et `myprotein.html` (reco par site),
+  `dashboard.html` et `myprotein-dashboard.html`.
+- **Plus aucun HTML à la racine** (2026-07) : les copies `whey_dashboard.html`,
+  `recommandations.html`, `myprotein_dashboard.html`,
+  `myprotein-recommandations.html`, `comparatif.html` étaient des doublons
+  octet-pour-octet à régénérer et committer chaque jour. Les liens entre pages
+  sont relatifs → ouvrir `docs/index.html` en local fonctionne tel quel. Les
+  champs `*_local` de `SiteConfig` et les tokens `__DASHBOARD_HREF__` par
+  destination ont disparu avec eux. **Ne pas les réintroduire.**
+- `generate_comparatif(sites)` prend une **liste de SiteConfig** et relit chaque
+  Excel via `_site_snapshot`. Elle est appelée depuis **`myprotein_tracker.py`**
+  (fin de `main`) et pas depuis `hsn_tracker.py` : c'est le seul module qui
+  connaît les deux configs sans créer d'import circulaire. Conséquence : lancer
+  `hsn_tracker.py` seul ne régénère PAS l'accueil.
+- **Honnêteté du match whey** : le meilleur rapport d'un site peut être une
+  protéine végétale (soja/pois, structurellement moins chère au kg de protéine)
+  face à une whey laitière chez l'autre. Le flag `mixed` détecte ce cas, affiche
+  un avertissement sous le bloc, et **exclut cet écart** du chiffre « jusqu'à
+  N % » de la section étude (sinon on annonce 241 % pour un écart qui n'en est
+  pas un). Ne pas retirer ce garde-fou — c'est ce qui rend le comparatif
+  défendable publiquement.
+
+## Statut actif / inactif (distinct de la rupture de stock)
+
+- Trois états distincts, à ne pas confondre :
+  - **En stock / rupture** (colonne Excel `En stock`) : le produit est au
+    catalogue mais indisponible. Il est toujours scrapé chaque jour → **actif**.
+  - **Inactif** : plus vu au scrape depuis > `STALE_SIZE_DAYS` (3) jours. Retiré
+    du catalogue, ou taille/nom qui a changé. Gardé et affiché grisé (badge
+    💤 Inactif) sur le dashboard, **masqué par défaut** (case « Afficher les
+    inactifs »), et **exclu du recommandeur** — on ne conseille pas une réf
+    qu'on ne sait plus trouver.
+  - **Supprimé** : absent depuis > `INACTIVE_DROP_DAYS` (30) jours →
+    `_activity_status` le retire de `latest` pour de bon.
+- `_activity_status(latest)` remplace l'ancien `_prune_stale_sizes` : elle
+  **renvoie** `{key: {actif, joursAbsent}}` et ne supprime que les > 30 jours.
+  Les deux appelants (`generate_dashboard`, `_recommendation_data`) décident
+  ensuite quoi faire des inactifs — c'est volontairement leur choix, pas celui
+  de la fonction.
 
 ## Lignes fantômes dans `latest` (dashboard + recommandeur)
 
@@ -200,11 +262,11 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
     clé `(produit, taille)` traite ça comme un **produit entièrement différent**,
     donc l'ancien nom ne se met plus jamais à jour et pollue le dashboard/reco en
     doublon.
-- **Fix** : `_prune_stale_sizes(latest)` (partagé par les deux fonctions) retire
-  toute ligne dont la date est en retard de plus de `STALE_SIZE_DAYS` (3) **par
-  rapport à la date la plus récente de TOUT le snapshot** — pas par rapport à la
-  dernière date du même nom de produit (un nom qui change de casse n'a par
-  définition aucune ligne "plus récente" sous son propre nom à comparer).
+- **Fix** : `_activity_status(latest)` (partagé par les deux fonctions) compare la
+  date de chaque ligne à la date la plus récente de **TOUT le snapshot** — pas à
+  la dernière date du même nom de produit (un nom qui change de casse n'a par
+  définition aucune ligne "plus récente" sous son propre nom à comparer). Cf. la
+  section « Statut actif / inactif » ci-dessus pour les seuils.
 
 ## Recommandeur (`generate_recommendations`) — pas de textes hardcodés par site
 

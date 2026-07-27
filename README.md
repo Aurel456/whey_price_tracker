@@ -24,7 +24,7 @@ Repo : [github.com/Aurel456/whey_price_tracker](https://github.com/Aurel456/whey
    - **Type whey** : isolat CFM, hydrolysat, concentré, native, caséine, végétal, mix
    - **Type oméga** : forme TG / EE, certification IFOS
    - **Type créatine** : Creapure®, monohydrate, mesh 100/200/500
-6. Ajoute les données du jour dans `whey_prices.xlsx` (feuille "Historique") puis génère `whey_dashboard.html` (onglets Whey / Oméga-3 / Créatine, graphiques Chart.js, tendances, badge deal)
+6. Ajoute les données du jour dans `whey_prices.xlsx` (feuille "Historique") puis génère `docs/dashboard.html` (onglets Whey / Oméga-3 / Créatine, graphiques Chart.js, tendances, badge deal)
 
 Les variantes "Monodose" et "Pack" sont automatiquement exclues.
 
@@ -49,14 +49,13 @@ python hsn_tracker.py
 | `hsn_tracker.py` | Script principal (scraping + Excel + dashboard) | ✓ |
 | `requirements.txt` | Dépendances Python | ✓ |
 | `whey_prices.xlsx` | Historique des prix (créé automatiquement) | ✓ |
-| `whey_dashboard.html` | Dashboard technique (généré automatiquement) | ✓ |
-| `recommandations.html` | Page vitrine grand public : recommandeur interactif + guide (générée automatiquement) | ✓ |
-| `docs/index.html` | Accueil GitHub Pages = page recommandations (généré automatiquement) | ✓ |
+| `docs/index.html` | Accueil GitHub Pages = comparatif multi-sites (généré automatiquement) | ✓ |
+| `docs/hsn.html` | Page recommandations HSN sur GitHub Pages (généré automatiquement) | ✓ |
 | `docs/dashboard.html` | Dashboard technique servi par GitHub Pages (généré automatiquement) | ✓ |
 | `descriptions.json` | Descriptions courtes / mots-clés des produits (optionnel) | ✓ |
 | `tags.json` | Labels persos + notes par produit (édité depuis le dashboard) | ✓ |
 
-`whey_prices.xlsx` et `whey_dashboard.html` sont versionnés : chaque mise à jour de prix produit un commit, créant un historique git complet de l'évolution des prix.
+`whey_prices.xlsx` et les pages de `docs/` sont versionnés : chaque mise à jour de prix produit un commit, créant un historique git complet de l'évolution des prix.
 
 ## Dashboard
 
@@ -134,8 +133,8 @@ sortie séparés** :
 | ------ | --- |
 | `myprotein_tracker.py` | Script MyProtein (scraping + Excel + dashboard) |
 | `myprotein_prices.xlsx` | Historique des prix MyProtein |
-| `myprotein_dashboard.html` / `docs/myprotein-dashboard.html` | Dashboard (local / GitHub Pages) |
-| `myprotein-recommandations.html` / `docs/myprotein.html` | Page recommandations (local / GitHub Pages) |
+| `docs/myprotein-dashboard.html` | Dashboard MyProtein |
+| `docs/myprotein.html` | Page recommandations MyProtein |
 
 ```bash
 python myprotein_tracker.py
@@ -151,7 +150,9 @@ Particularités :
 - MyProtein **ne publie pas de profil d'acides aminés** → la colonne €/3g leucine
   reste vide (les métriques €/kg protéine et €/30g protéine fonctionnent).
 - Le workflow GitHub Actions lance les deux trackers à la suite et commit leurs
-  fichiers ensemble.
+  fichiers ensemble. `myprotein_tracker.py` régénère aussi la page d'accueil
+  (comparatif multi-sites) en fin de run : c'est le seul module qui connaît les
+  deux `SiteConfig`, donc lancer `hsn_tracker.py` seul ne met pas l'accueil à jour.
 
 ## Catégories
 
@@ -198,16 +199,17 @@ Un workflow [.github/workflows/track-prices.yml](.github/workflows/track-prices.
 
 ## Partage public (GitHub Pages)
 
-Deux pages HTML autonomes sont générées (Chart.js via CDN, données injectées, aucun backend). Sur GitHub Pages, **la page d'accueil est la page recommandations** (grand public), le dashboard technique est un cran plus loin :
+Les pages HTML générées sont autonomes (Chart.js via CDN, données injectées, aucun backend). Sur GitHub Pages, **la page d'accueil est le comparatif multi-sites** ; les pages par site sont un cran plus loin, et les dashboards techniques encore après :
 
-- **`docs/index.html`** *(accueil)* — la page vitrine grand public avec un **recommandeur interactif** : le visiteur choisit ses critères (gamme whey *Vegan / Basique / Supérieure*, *sans édulcorant* ; oméga *concentration EPA+DHA ≥ X%* + *IFOS* + *forme TG* ; créatine *Creapure® / Monohydrate*) et obtient en direct le meilleur rapport qualité-prix qui correspond + des alternatives. Plus les bons plans du jour et un guide « comment bien choisir ». C'est la page à partager.
-- **`docs/dashboard.html`** — le dashboard technique complet (tableaux, filtres, graphiques), accessible via le bouton « Explorer toutes les données » de la page d'accueil.
+- **`docs/index.html`** *(accueil)* — le **comparatif HSN vs MyProtein** : pour chaque catégorie (whey, oméga-3, créatine), la meilleure offre de chaque site face à face sur la même métrique de coût réel, l'écart chiffré entre sites, les constats de l'étude et la méthodologie. C'est la page à partager. Généré par `generate_comparatif()`, appelé en fin de `myprotein_tracker.py` (seul module qui connaît les deux sites).
+- **`docs/hsn.html`** / **`docs/myprotein.html`** — la page par site avec le **recommandeur interactif** : le visiteur choisit ses critères (gamme whey *Vegan / Basique / Supérieure*, *sans édulcorant* ; oméga *concentration EPA+DHA ≥ X%* + *IFOS* + *forme TG* ; créatine *Creapure® / Monohydrate*) et obtient en direct le meilleur rapport qualité-prix qui correspond + des alternatives. Plus les bons plans du jour et un guide « comment bien choisir ».
+- **`docs/dashboard.html`** / **`docs/myprotein-dashboard.html`** — le dashboard technique complet (tableaux, filtres, graphiques), accessible via le bouton « Explorer toutes les données ».
 
   > Pour les oméga-3, le critère qualité est **IFOS + concentration ≥ 50 %** (et non un TOTOX chiffré : celui-ci vit dans les rapports IFOS par lot, pas sur les pages produit). IFOS certifie l'oxydation/TOTOX et les contaminants lot par lot — c'est le proxy fiable. Avec ces défauts, la reco sort *ULTRA OMEGA-3 TG (IFOS)* plutôt que l'huile de poisson basique (30 % de concentration).
 
-`generate_dashboard()` (appelé à chaque scrape) régénère le tout. En local, le dashboard reste `whey_dashboard.html` à la racine et la reco `recommandations.html`.
+`generate_dashboard()` (appelé à chaque scrape) régénère dashboard + reco du site ; `generate_comparatif()` régénère l'accueil. **Toutes les pages vivent dans `docs/`** — il n'y a plus de copie à la racine, les liens entre pages étant relatifs, ouvrir `docs/index.html` en local fonctionne tel quel.
 
-**Activation (une seule fois)** : repo GitHub → *Settings* → *Pages* → *Source* = `Deploy from a branch`, *Branch* = `main`, dossier = `/docs` → *Save*. Le site est ensuite en ligne à `https://aurel456.github.io/whey_price_tracker/` (tombe sur la page recommandations).
+**Activation (déjà faite)** : repo GitHub → *Settings* → *Pages* → *Source* = `Deploy from a branch`, *Branch* = `main`, dossier = `/docs` → *Save*. Le site est en ligne à `https://aurel456.github.io/whey_price_tracker/` (tombe sur le comparatif).
 
 **Mise à jour** : le workflow quotidien commit `docs/index.html` en même temps que les prix → le site public se rafraîchit tout seul chaque jour. Pas de manip.
 
@@ -215,7 +217,7 @@ Deux pages HTML autonomes sont générées (Chart.js via CDN, données injectée
 
 - Le repo doit être **public** (GitHub Pages gratuit). Le code du scraper devient donc visible.
 - Les **tags/notes persos** sont injectés au moment de la génération (depuis `tags.json`) : les visiteurs voient tes annotations mais leurs propres édits restent dans leur navigateur (`localStorage`), sans impact sur ta version.
-- `whey_dashboard.html` à la racine reste la copie pour ouverture locale ; `docs/index.html` en est le miroir publié, régénéré simultanément.
+- Il n'y a plus de copie HTML à la racine du repo : `docs/` est la seule source, ouvrable aussi bien en local que servie par Pages.
 
 ## Robustesse
 

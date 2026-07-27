@@ -58,6 +58,13 @@ jobs:
           wait $PID_HSN; echo "HSN exit=$?"
           wait $PID_MP;  echo "MyProtein exit=$?"
 
+      # Les deux trackers tournent en parallèle : le comparatif généré en fin de
+      # myprotein_tracker.py peut donc avoir lu un Excel HSN pas encore écrit.
+      # On le régénère ici, une fois les deux scrapes terminés, pour que l'accueil
+      # reflète bien les deux relevés du jour.
+      - name: Rebuild comparatif (accueil)
+        run: python -c "import hsn_tracker as core, myprotein_tracker as mp; core.generate_comparatif([core.HSN_CFG, mp.MP_CFG])"
+
       - name: Show errors log (if any)
         if: always()
         run: |
@@ -72,10 +79,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add whey_prices.xlsx whey_dashboard.html recommandations.html \
-                  docs/index.html docs/dashboard.html \
-                  myprotein_prices.xlsx myprotein_dashboard.html myprotein-recommandations.html \
-                  docs/myprotein-dashboard.html docs/myprotein.html 2>/dev/null || true
+          git add whey_prices.xlsx myprotein_prices.xlsx docs/ 2>/dev/null || true
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else

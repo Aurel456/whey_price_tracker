@@ -46,12 +46,9 @@ MP_CFG = SiteConfig(
     site_domain="MyProtein.com",
     excel_path=_HERE / "myprotein_prices.xlsx",
     error_log_path=_HERE / "myprotein_errors.log",
-    dashboard_local="myprotein_dashboard.html",
-    dashboard_docs="myprotein-dashboard.html",  # ≠ index.html (= HSN sur Pages)
-    reco_local="myprotein-recommandations.html",
+    dashboard_docs="myprotein-dashboard.html",
     reco_docs="myprotein.html",
     other_brand="HSN",
-    other_dashboard_local="whey_dashboard.html",
     other_dashboard_docs="dashboard.html",
 )
 
@@ -63,6 +60,13 @@ PRODUCTS = [
     ("https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/", "whey"),
     ("https://fr.myprotein.com/p/nutrition-sportive/clear-whey-isolate/12081395/", "whey"),
     ("https://fr.myprotein.com/p/nutrition-sportive/impact-diet-whey/10530657/", "whey"),
+    # Protéines végétales — même type "whey" côté métriques (€/kg de protéine),
+    # `_detect_whey_type` les taggue `vegetal` via les ingrédients. Indispensables
+    # pour que le comparatif oppose une gamme végétale HSN à une gamme végétale
+    # MyProtein, et pas à une whey laitière (comparaison sans valeur).
+    ("https://fr.myprotein.com/p/nutrition-sportive/isolat-de-proteine-de-soja/10529701/", "whey"),
+    ("https://fr.myprotein.com/p/nutrition-sportive/isolat-de-proteine-de-pois/10530136/", "whey"),
+    ("https://fr.myprotein.com/p/nutrition-sportive/proteine-vegan-impact/11776868/", "whey"),
     # Créatine
     ("https://fr.myprotein.com/p/nutrition-sportive/creatine-monohydrate-en-poudre/10530050/", "creatine"),
     ("https://fr.myprotein.com/p/nutrition-sportive/the-creatine-creapure/10529740/", "creatine"),
@@ -160,6 +164,19 @@ def _group_by_size(variants: list, ptype: str, canon_portions=None, canon_caps=N
     Le poids net affiché vient de la variante représentative retenue.
     Renvoie [{size_label, size_kg|caps, price, in_stock}].
     """
+    variants = list(variants)
+    # Certaines protéines (végétales notamment : isolat de soja, de pois, Vegan
+    # Impact) n'exposent QUE des poids dans la ld+json — aucun nom de variante ne
+    # porte de nb de portions. Le regroupement whey par portions les jetait alors
+    # toutes (0 ligne, produit invisible). Quand le produit entier est dans ce cas,
+    # on retombe sur le poids comme clé, exactement comme la créatine. C'est une
+    # décision par PRODUIT (pas par variante) : si le produit expose des portions,
+    # elles restent l'axe de référence et une variante sans portions est bien une
+    # variante non standard à écarter.
+    whey_by_weight = (
+        ptype == "whey"
+        and not any(PORTIONS_RE.search(v["name"] or "") for v in variants)
+    )
     buckets = {}
     for v in variants:
         if v["price"] is None:
@@ -177,7 +194,7 @@ def _group_by_size(variants: list, ptype: str, canon_portions=None, canon_caps=N
             kg = _weight_to_kg(v["name"])
             if not kg:
                 continue
-            if ptype == "whey":
+            if ptype == "whey" and not whey_by_weight:
                 mp = PORTIONS_RE.search(v["name"])
                 if not mp:
                     continue  # whey sans nb de portions → variante non standard
@@ -198,7 +215,7 @@ def _group_by_size(variants: list, ptype: str, canon_portions=None, canon_caps=N
         if better:
             if ptype == "omega3":
                 label = f"{extra['caps']} gélules"
-            elif ptype == "whey":
+            elif ptype == "whey" and not whey_by_weight:
                 label = f"{extra['portions']} portions ({_kg_label(extra['size_kg'])})"
             else:
                 label = _kg_label(extra["size_kg"])
@@ -499,6 +516,11 @@ async def main():
         print(f"Excel OK : {MP_CFG.excel_path}")
         print("Génération du dashboard HTML...")
         generate_dashboard(cfg=MP_CFG)
+        # Le comparatif multi-sites est régénéré ici et pas dans hsn_tracker : c'est
+        # le seul module qui connaît les deux SiteConfig (hsn_tracker ne peut pas
+        # importer myprotein_tracker sans cycle). Le workflow lance HSN puis
+        # MyProtein, donc l'accueil reflète bien les deux relevés du jour.
+        core.generate_comparatif([core.HSN_CFG, MP_CFG])
         print(f"Terminé ! {len(clean_rows)} entrées MyProtein")
     else:
         print("Aucune donnée collectée.")

@@ -47,14 +47,13 @@ class SiteConfig:
     site_domain: str        # domaine affiché sur la page reco ("hsnstore.fr")
     excel_path: Path        # fichier historique des prix
     error_log_path: Path    # journal d'erreurs
-    dashboard_local: str    # dashboard, ouverture locale (racine du repo)
-    dashboard_docs: str     # dashboard, miroir GitHub Pages (docs/)
-    reco_local: str         # page recommandations, locale (racine)
-    reco_docs: str          # page recommandations, GitHub Pages (docs/)
+    # Toutes les pages générées vivent dans docs/ (servi par GitHub Pages, et
+    # ouvrable en local tel quel : les liens entre pages sont relatifs).
+    dashboard_docs: str     # dashboard technique
+    reco_docs: str          # page recommandations du site
     # Lien croisé vers le dashboard de l'AUTRE site (nav inter-sites sur la page
     # centrale). Laisser brand vide pour ne pas afficher de lien.
     other_brand: str = ""
-    other_dashboard_local: str = ""
     other_dashboard_docs: str = ""
 
 
@@ -64,12 +63,11 @@ HSN_CFG = SiteConfig(
     site_domain="HSNstore.fr",
     excel_path=EXCEL_PATH,
     error_log_path=ERROR_LOG_PATH,
-    dashboard_local="whey_dashboard.html",
     dashboard_docs="dashboard.html",
-    reco_local="recommandations.html",
-    reco_docs="index.html",
+    # L'accueil (index.html) est le comparatif multi-sites, la page reco HSN est
+    # un cran plus loin.
+    reco_docs="hsn.html",
     other_brand="MyProtein",
-    other_dashboard_local="myprotein_dashboard.html",
     other_dashboard_docs="myprotein-dashboard.html",
 )
 
@@ -1027,13 +1025,19 @@ async def scrape_product(page, url: str) -> list:
 
 
 # ── Dashboard HTML ────────────────────────────────────────────────────────────
-STALE_SIZE_DAYS = 3
+STALE_SIZE_DAYS = 3        # au-delà : la ligne passe "inactive" (plus vue au scrape)
+INACTIVE_DROP_DAYS = 30    # au-delà : la ligne est retirée pour de bon
 
 
-def _prune_stale_sizes(latest: dict) -> None:
-    """Retire de `latest` (keyé par (produit, taille)) les lignes fantômes, par
-    rapport à la date de scrape la plus récente de TOUT le snapshot. Deux causes
-    observées :
+def _activity_status(latest: dict) -> dict:
+    """Classe chaque ligne de `latest` (keyé par (produit, taille)) en active /
+    inactive, et **supprime** en place celles absentes depuis plus de
+    `INACTIVE_DROP_DAYS`. Renvoie `{key: {"actif": bool, "joursAbsent": int}}`.
+
+    Le statut est distinct de la rupture de stock (`En stock`) : un produit en
+    rupture est toujours listé sur le site (on le re-scrape chaque jour, il reste
+    donc *actif*), alors qu'un produit *inactif* a disparu du scrape — il n'est
+    plus au catalogue, ou sa taille/son nom a changé. Deux causes observées :
       - MyProtein : le regroupement whey/oméga garde la variante (arôme) la moins
         chère par bucket (portions/gélules), et le POIDS affiché dans `Taille`
         vient de cette variante — une taille comme "625g" peut donc disparaître
@@ -1049,21 +1053,22 @@ def _prune_stale_sizes(latest: dict) -> None:
     PLUS RÉCENTE du snapshot entier (et pas seulement à celle de son propre nom de
     produit) : un produit encore réellement vendu est re-scrapé chaque jour comme
     les autres, donc sa date suit le global — seules les vraies lignes mortes
-    (taille disparue, ancien nom remplacé) prennent du retard. Modifie `latest`
-    en place."""
+    (taille disparue, ancien nom remplacé) prennent du retard."""
     global_max_date = max((str(r.get("Date", "")) for r in latest.values()), default="")
     if not global_max_date:
-        return
+        return {k: {"actif": True, "joursAbsent": 0} for k in latest}
+    status = {}
     for key in list(latest):
         row_date = str(latest[key].get("Date", ""))
-        if not row_date:
-            continue
         try:
-            stale = (date.fromisoformat(global_max_date) - date.fromisoformat(row_date)).days > STALE_SIZE_DAYS
+            gap = (date.fromisoformat(global_max_date) - date.fromisoformat(row_date)).days
         except ValueError:
-            stale = False
-        if stale:
+            gap = 0
+        if gap > INACTIVE_DROP_DAYS:
             del latest[key]
+            continue
+        status[key] = {"actif": gap <= STALE_SIZE_DAYS, "joursAbsent": max(gap, 0)}
+    return status
 
 
 def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
@@ -1104,7 +1109,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         if key not in latest or rdate >= str(latest[key].get("Date", "")):
             latest[key] = r
 
-    _prune_stale_sizes(latest)
+    activity = _activity_status(latest)
 
     # Calcule moyenne historique (hors dernière date) + flag deal
     deal_meta = {}
@@ -1185,6 +1190,11 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
             "note":        str(manual.get("note", "") or ""),
             "hasIngredients": bool(ingr.strip()) if isinstance(ingr, str) else False,
             "en_stock":    r.get("En stock"),
+            # Statut catalogue, distinct de la rupture de stock : False = plus vu
+            # au scraping depuis > STALE_SIZE_DAYS jours (retiré du catalogue,
+            # taille ou nom changé). Retiré définitivement après INACTIVE_DROP_DAYS.
+            "actif":       activity.get(key, {}).get("actif", True),
+            "joursAbsent": activity.get(key, {}).get("joursAbsent", 0),
         })
 
     # Sérialise l'historique pour les courbes de tendance
@@ -1271,6 +1281,12 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         ".oos-badge { display: inline-block; background: #FFF0EE; color: #B23B3B;"
         " border: 0.5px solid #F5C7C7; font-size: 9px; font-weight: 700; padding: 1px 5px;"
         " border-radius: 3px; margin-left: 6px; vertical-align: middle; }\n"
+        ".inactif-badge { display: inline-block; background: #EFEFEF; color: #777;"
+        " border: 0.5px solid #DADADA; font-size: 9px; font-weight: 700; padding: 1px 5px;"
+        " border-radius: 3px; margin-left: 6px; vertical-align: middle; }\n"
+        "tr.row-inactif td { opacity: 0.55; }\n"
+        ".toolbar-toggle { font-size: 11px; color: #666; display: flex; align-items: center;"
+        " gap: 4px; cursor: pointer; user-select: none; }\n"
         ".trend-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;"
         " margin-bottom: 12px; }\n"
         ".trend-controls select { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px;"
@@ -1439,6 +1455,9 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "  <div class='section-title'>Données complètes</div>\n"
         "  <div class='table-toolbar'>\n"
         "    <input id='searchInput' class='search-input' type='text' placeholder='Rechercher un produit...'>\n"
+        "    <label class='toolbar-toggle' title='Un produit inactif n&apos;a plus été vu au scraping depuis plus de "
+        f"{STALE_SIZE_DAYS} jours (retiré du catalogue, taille ou nom changé). Il disparaît définitivement après {INACTIVE_DROP_DAYS} jours.'>"
+        "<input type='checkbox' id='showInactifs'> Afficher les inactifs</label>\n"
         "    <span id='rowCount' style='font-size:11px;color:#888'></span>\n"
         "  </div>\n"
         "  <table id='detailTable'><thead id='tableHead'></thead><tbody id='tableBody'></tbody></table>\n"
@@ -1562,6 +1581,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "let selectedTypeTags = new Set();\n"
         "let swLogic = 'OR', wtLogic = 'OR', lblLogic = 'OR', ttLogic = 'OR';\n"
         "let searchQuery = '';\n"
+        "let showInactifs = false;\n"
         "let sortKey = 'pxkgProt', sortAsc = true;\n"
         "let chartPxkgProt, chartCout30, chartPxkg, chartTrend, chartTrendPrice;\n"
         "let selectedTrendIndices = [];\n"
@@ -1591,6 +1611,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "}\n"
         "function getFiltered(){\n"
         "  let f = currentTab==='global' ? RAW.slice() : RAW.filter(r => (r.type||'whey') === currentTab);\n"
+        "  if(!showInactifs){f=f.filter(r=>r.actif!==false);}\n"
         "  if(currentTab==='whey' && currentCategory!=='all'){f=f.filter(r=>r.categorie===currentCategory);}\n"
         "  if(currentSize!=='all'){f=f.filter(r=>r.taille===currentSize);}\n"
         "  if(currentTab==='whey'){\n"
@@ -1745,12 +1766,13 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "    const dealBadge = r.isDeal ? `<span class='deal-badge' title='Sous la moyenne historique de plus de 5%'>🔥 DEAL</span>` : '';\n"
         "    const missing = (currentTab==='whey' && isMissingInfo(r)) ? `<span class='missing-pill' title='Pas (ou peu) d&apos;info détectée — clic ✏️ pour annoter'>❓ à classer</span>` : '';\n"
         "    const oosBadge = r.en_stock === false ? `<span class='oos-badge' title='Rupture de stock détectée au dernier scraping'>⚠️ Rupture</span>` : '';\n"
+        "    const inactifBadge = r.actif === false ? `<span class='inactif-badge' title='Plus vu au scraping depuis ${r.joursAbsent} jour(s) — sans doute retiré du catalogue. Prix affiché = dernier connu.'>💤 Inactif</span>` : '';\n"
         "    const eff = effectiveTags(r.produit);\n"
         "    const noteLine = eff.note ? `<div class='note-line'>📝 ${escapeHtml(eff.note)}</div>` : '';\n"
         "    const editBtn = `<button class='edit-btn' title='Éditer tags &amp; note' onclick='openEditModal(${escapeHtml(JSON.stringify(r.produit))})'>✏️</button>`;\n"
         "    const cells = cols.map(c=>{\n"
         "      if(c.k==='produit'){\n"
-        "        return `<td title='${escapeHtml(r.produit)}' style='white-space:normal;overflow:visible;'><a href='${r.url}' target='_blank'>${escapeHtml(r.produit)}</a>${editBtn}${dealBadge}${missing}${oosBadge}<div style='margin-top:3px;white-space:normal;'>${renderChips(r)}</div>${noteLine}</td>`;\n"
+        "        return `<td title='${escapeHtml(r.produit)}' style='white-space:normal;overflow:visible;'><a href='${r.url}' target='_blank'>${escapeHtml(r.produit)}</a>${editBtn}${dealBadge}${missing}${oosBadge}${inactifBadge}<div style='margin-top:3px;white-space:normal;'>${renderChips(r)}</div>${noteLine}</td>`;\n"
         "      }\n"
         "      const align = c.num ? 'text-align:right' : '';\n"
         "      const isBest = c.best && bestVals[c.k]!=null && r[c.k]===bestVals[c.k];\n"
@@ -1758,7 +1780,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "      const dateStyle = c.fmt==='date' ? ';font-size:11px;color:#888' : '';\n"
         "      return `<td class='${cls}' style='${align}${dateStyle}'>${fmtCell(c, r[c.k])}</td>`;\n"
         "    }).join('');\n"
-        "    return `<tr>${cells}</tr>`;\n"
+        "    return `<tr class='${r.actif===false?'row-inactif':''}'>${cells}</tr>`;\n"
         "  }).join('');\n"
         "  // Indicateur global \"à classer\" (whey uniquement)\n"
         "  if(currentTab==='whey'){\n"
@@ -1789,6 +1811,9 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "function setupSearch(){\n"
         "  document.getElementById('searchInput').addEventListener('input',e=>{\n"
         "    searchQuery=e.target.value.trim();updateTable();\n"
+        "  });\n"
+        "  document.getElementById('showInactifs').addEventListener('change',e=>{\n"
+        "    showInactifs=e.target.checked;buildFilters();updateCharts();updateTable();buildTrendSelect();\n"
         "  });\n"
         "}\n"
         "function buildTrendSelect(){\n"
@@ -2060,7 +2085,9 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "    const dealCount = tabRows.filter(r=>r.isDeal).length;\n"
         "    const oosCount  = tabRows.filter(r=>r.en_stock===false).length;\n"
         "    cards.push(`<div class='card'><div class='card-label'>🔥 DEALs en cours</div><div class='card-value' style='color:#FF6B35'>${dealCount}</div><div class='card-sub'>sous moyenne historique -5%</div></div>`);\n"
-        "    if(oosCount>0) cards.push(`<div class='card'><div class='card-label'>⚠️ Ruptures</div><div class='card-value' style='color:#B23B3B'>${oosCount}</div></div>`);\n"
+        "    if(oosCount>0) cards.push(`<div class='card'><div class='card-label'>⚠️ Ruptures</div><div class='card-value' style='color:#B23B3B'>${oosCount}</div><div class='card-sub'>listé mais indisponible</div></div>`);\n"
+        "    const inactCount = RAW.filter(r=>r.actif===false).length;\n"
+        "    if(inactCount>0) cards.push(`<div class='card'><div class='card-label'>💤 Inactifs</div><div class='card-value' style='color:#888'>${inactCount}</div><div class='card-sub'>plus vus au catalogue</div></div>`);\n"
         "    const bw=bestOf(tabRows.filter(r=>(r.type||'whey')==='whey'),'pxkgProt');\n"
         "    const bo=bestOf(tabRows.filter(r=>(r.type||'whey')==='omega3'),'coutGOmega');\n"
         "    const bcr=bestOf(tabRows.filter(r=>(r.type||'whey')==='creatine'),'coutKgCrea');\n"
@@ -2291,21 +2318,15 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "</html>\n"
     )
 
-    # Landing page : sur GitHub Pages, l'accueil (docs/index.html) est la page
-    # recommandations grand public ; le dashboard technique est servi en
-    # docs/dashboard.html. En local il reste whey_dashboard.html (racine).
-    # Le lien dashboard→reco (__RECO_HREF__) diffère selon la destination :
-    #   - racine            → recommandations.html
-    #   - GitHub Pages (docs/) → index.html (l'accueil = la reco)
-    dash_path = cfg.excel_path.parent / cfg.dashboard_local
-    dash_path.write_text(html.replace("__RECO_HREF__", cfg.reco_local), encoding="utf-8")
-    print(f"Dashboard : {dash_path}")
-
+    # Toutes les pages vivent dans docs/ (servi par GitHub Pages). Les liens entre
+    # elles sont relatifs, donc ouvrir docs/dashboard.html en local marche aussi —
+    # pas besoin d'une copie racine (l'ancien doublon whey_dashboard.html a été
+    # supprimé : deux fichiers identiques à régénérer et à committer chaque jour).
     docs_dir = cfg.excel_path.parent / "docs"
     docs_dir.mkdir(exist_ok=True)
     pages_path = docs_dir / cfg.dashboard_docs
     pages_path.write_text(html.replace("__RECO_HREF__", cfg.reco_docs), encoding="utf-8")
-    print(f"Pages    : {pages_path}")
+    print(f"Dashboard : {pages_path}")
 
     # Page vitrine grand public (recommandations) — réutilise les mêmes rows.
     generate_recommendations(rows, cfg)
@@ -2334,11 +2355,14 @@ def _reco_fmt_eur(v, d=2):
 # Métadonnées d'affichage par catégorie (couleur, métrique vedette, unité).
 RECO_KIND = {
     "whey":     {"label": "Whey & protéines", "accent": "#2563eb", "soft": "#e8f1fd",
-                 "metric": "pxkgProt", "unit": "/ kg de protéine", "d": 2, "icon": "💪"},
+                 "metric": "pxkgProt", "unit": "/ kg de protéine", "d": 2, "icon": "💪",
+                 "unit_long": "prix du kilo de protéine réellement contenue"},
     "omega3":   {"label": "Oméga-3", "accent": "#e8920a", "soft": "#fdf3e0",
-                 "metric": "coutGOmega", "unit": "/ g d'EPA+DHA", "d": 3, "icon": "🐟"},
+                 "metric": "coutGOmega", "unit": "/ g d'EPA+DHA", "d": 3, "icon": "🐟",
+                 "unit_long": "prix du gramme d'EPA+DHA réellement présent"},
     "creatine": {"label": "Créatine", "accent": "#7c5cdb", "soft": "#efeafb",
-                 "metric": "coutKgCrea", "unit": "/ kg", "d": 2, "icon": "⚡"},
+                 "metric": "coutKgCrea", "unit": "/ kg", "d": 2, "icon": "⚡",
+                 "unit_long": "prix du kilo de créatine pure"},
 }
 
 
@@ -2415,7 +2439,13 @@ def _recommendation_data(rows: list) -> list:
         if key not in latest or rdate >= str(latest[key].get("Date", "")):
             latest[key] = r
 
-    _prune_stale_sizes(latest)
+    activity = _activity_status(latest)
+    # Le recommandeur ne propose QUE des produits actifs : conseiller une réf qui
+    # a disparu du catalogue il y a une semaine n'a aucun intérêt pour un visiteur
+    # (contrairement au dashboard, où l'historique reste consultable 30 jours).
+    for key, st in activity.items():
+        if not st["actif"]:
+            latest.pop(key, None)
 
     deal = {}
     for key, hist in history_by_key.items():
@@ -2800,12 +2830,14 @@ renderCats();renderCrit();renderOut();
         "</div></section>\n"
         # CTA dashboard
         "<section style='padding-top:0'><div class='wrap big-cta'>"
+        "<a href='__COMPARATIF_HREF__'>⚔️ Comparer avec les autres sites →</a>"
         f"<a href='__DASHBOARD_HREF__'>📊 Explorer les données {cfg.brand} &amp; graphiques →</a>"
         f"{other_cta}"
         "</div></section>\n"
         # Footer
         "<footer><div class='wrap'>"
         f"Dernière mise à jour : {today_str}"
+        " &nbsp;·&nbsp; <a href='__COMPARATIF_HREF__'>Comparatif tous sites</a>"
         f" &nbsp;·&nbsp; <a href='__DASHBOARD_HREF__'>Dashboard {cfg.brand}</a>"
         f"{other_foot}"
         " &nbsp;·&nbsp; <a href='https://github.com/Aurel456/whey_price_tracker' target='_blank' rel='noopener'>Code source</a>"
@@ -2816,20 +2848,279 @@ renderCats();renderCrit();renderOut();
         "</body>\n</html>\n"
     )
 
-    # Landing page : docs/index.html = page recommandations (accueil public).
-    # Le lien vers le dashboard diffère selon la destination :
-    #   - racine            → whey_dashboard.html
-    #   - GitHub Pages (docs/) → dashboard.html
-    out_root = cfg.excel_path.parent / cfg.reco_local
-    root_html = (html.replace("__DASHBOARD_HREF__", cfg.dashboard_local)
-                     .replace("__OTHER_DASHBOARD_HREF__", cfg.other_dashboard_local))
-    out_root.write_text(root_html, encoding="utf-8")
     docs_dir = cfg.excel_path.parent / "docs"
     docs_dir.mkdir(exist_ok=True)
     pages_html = (html.replace("__DASHBOARD_HREF__", cfg.dashboard_docs)
+                      .replace("__COMPARATIF_HREF__", COMPARATIF_DOCS)
                       .replace("__OTHER_DASHBOARD_HREF__", cfg.other_dashboard_docs))
-    (docs_dir / cfg.reco_docs).write_text(pages_html, encoding="utf-8")           # accueil Pages
-    print(f"Recommandations : {out_root}")
+    out = docs_dir / cfg.reco_docs
+    out.write_text(pages_html, encoding="utf-8")
+    print(f"Recommandations : {out}")
+
+
+# ── Comparatif multi-sites (accueil GitHub Pages) ─────────────────────────────
+# La page reco est mono-site par construction (un SiteConfig = un Excel). Le
+# comparatif est la couche au-dessus : il relit le dernier snapshot de CHAQUE
+# site et les met face à face. C'est lui l'accueil public (docs/index.html) ;
+# les pages reco par site sont un cran plus loin (docs/hsn.html, myprotein.html).
+COMPARATIF_DOCS = "index.html"
+
+# S'ajoute à RECO_CSS (variables, hero, chips, edu-grid, footer déjà définis là).
+COMPARATIF_CSS = """
+.vs-block{background:var(--card);border:1px solid #e7ebf0;border-radius:20px;padding:24px;margin-bottom:20px;}
+.vs-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
+.vs-head .kind{margin-bottom:0;}
+.vs-crit{color:var(--muted);font-size:13px;}
+.vs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px;}
+.vs-card{border:1px solid #e7ebf0;border-radius:16px;padding:20px;background:#fbfcfe;display:flex;flex-direction:column;}
+.vs-card-win{border-color:#b9d4ff;background:#f4f8ff;box-shadow:0 6px 20px rgba(37,99,235,.08);}
+.vs-site{display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:800;font-size:15px;margin-bottom:10px;}
+.vs-win{font-size:10px;font-weight:800;background:#e7f6ee;color:#1d7150;padding:3px 9px;border-radius:20px;letter-spacing:.3px;}
+.vs-lose{font-size:10px;font-weight:800;background:#f4f5f7;color:#8a94a6;padding:3px 9px;border-radius:20px;}
+.vs-metric{font-size:28px;font-weight:800;letter-spacing:-1px;line-height:1.15;}
+.vs-metric small{font-size:12px;font-weight:500;color:var(--muted);letter-spacing:0;}
+.vs-card h4{font-size:15px;font-weight:700;margin:12px 0 3px;line-height:1.35;}
+.vs-card h4 a:hover{color:var(--whey);}
+.vs-sub{color:var(--muted);font-size:13px;}
+.vs-link{margin-top:auto;padding-top:12px;font-size:13px;font-weight:600;color:var(--whey);}
+.vs-ecart{margin-top:16px;padding-top:14px;border-top:1px dashed #e2e8f0;color:var(--muted);font-size:13px;}
+.site-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;}
+.site-card{background:var(--card);border:1px solid #e7ebf0;border-radius:18px;padding:24px;}
+.site-card h3{font-size:19px;font-weight:800;margin-bottom:3px;}
+.site-links{display:flex;gap:9px;flex-wrap:wrap;margin-top:16px;}
+.site-links .cta{background:var(--ink);color:#fff;padding:10px 16px;border-radius:11px;font-weight:600;font-size:13px;display:inline-block;}
+.site-links .cta.ghost{background:#fff;color:var(--ink);border:1px solid #d8dee8;}
+.method{background:#fff;border:1px solid #e7ebf0;border-left:4px solid var(--whey);border-radius:14px;padding:22px 24px;}
+.method h3{font-size:16px;font-weight:800;margin-bottom:7px;}
+.method p{color:var(--muted);font-size:14px;}
+.method a{color:var(--whey);font-weight:600;}
+@media(max-width:600px){.vs-block{padding:18px 16px;}}
+"""
+
+
+def _site_snapshot(cfg: "SiteConfig") -> dict:
+    """Dernier état d'un site : items en stock + méta (nb produits, jours suivis)."""
+    wb = load_or_create_workbook(cfg)
+    ws = wb["Historique"]
+    hdrs = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    rows = [
+        dict(zip(hdrs, r))
+        for r in ws.iter_rows(min_row=2, values_only=True)
+        if any(v is not None for v in r)
+    ]
+    items = [it for it in _recommendation_data(rows) if it.get("en_stock") is not False]
+    dates = sorted({str(r.get("Date", "")) for r in rows if r.get("Date")})
+    return {
+        "cfg": cfg,
+        "items": items,
+        "n_produits": len({it["produit"] for it in items}),
+        "n_releves": len(rows),
+        "dates": dates,
+    }
+
+
+def _best_of(items, kind: str):
+    """Meilleure offre d'une catégorie selon la métrique de coût réel du type."""
+    metric = RECO_KIND[kind]["metric"]
+    pool = [
+        it for it in items
+        if it["type"] == kind and it.get(metric) is not None
+        and (kind != "whey" or it.get("categorie") == "Whey")
+    ]
+    return min(pool, key=lambda it: it[metric]) if pool else None
+
+
+def generate_comparatif(sites: list) -> None:
+    """Génère la page d'accueil : comparatif HSN vs MyProtein (vs autres sites).
+
+    `sites` = liste de SiteConfig. La page se construit deux fois (racine / docs)
+    car les liens vers les pages par site diffèrent selon la destination."""
+    snaps = [_site_snapshot(cfg) for cfg in sites]
+    snaps = [s for s in snaps if s["items"]]
+    if not snaps:
+        print("Comparatif : aucun site avec des données, page non générée.")
+        return
+
+    today_str = date.today().strftime("%d/%m/%Y")
+    all_dates = sorted({d for s in snaps for d in s["dates"]})
+    tot_produits = sum(s["n_produits"] for s in snaps)
+    tot_releves  = sum(s["n_releves"] for s in snaps)
+
+    # Match par catégorie : meilleure offre de chaque site, gagnant = coût réel mini
+    matches = []
+    for kind, k in RECO_KIND.items():
+        entries = []
+        for s in snaps:
+            best = _best_of(s["items"], kind)
+            if best:
+                entries.append({"site": s["cfg"], "it": best, "m": best[k["metric"]]})
+        if not entries:
+            continue
+        entries.sort(key=lambda e: e["m"])
+        ecart = None
+        if len(entries) > 1 and entries[0]["m"]:
+            ecart = round((entries[-1]["m"] - entries[0]["m"]) / entries[0]["m"] * 100)
+        # `mixed` : les meilleures offres des sites ne sont pas de la même gamme
+        # (ex. isolat de soja vs whey concentrée) — l'écart chiffré n'est alors pas
+        # un écart de prix « à produit comparable ».
+        mixed = kind == "whey" and len({e["it"].get("wheyTier") for e in entries}) > 1
+        matches.append({"kind": kind, "meta": k, "entries": entries,
+                        "ecart": ecart, "mixed": mixed})
+
+    def build() -> str:
+        def reco_href(cfg):
+            return cfg.reco_docs
+
+        def dash_href(cfg):
+            return cfg.dashboard_docs
+
+        # ── Match par catégorie
+        match_html = ""
+        for m in matches:
+            k, kind = m["meta"], m["kind"]
+            cards = ""
+            for rank, e in enumerate(m["entries"]):
+                it, cfg_e = e["it"], e["site"]
+                win = rank == 0 and len(m["entries"]) > 1
+                badge = ("<span class='vs-win'>🏆 Le moins cher</span>" if win
+                         else ("<span class='vs-lose'>+{}%</span>".format(
+                               round((e['m'] - m['entries'][0]['m']) / m['entries'][0]['m'] * 100))
+                               if len(m["entries"]) > 1 and m["entries"][0]["m"] else ""))
+                chips_html = "".join(
+                    "<span class='chip chip-{}'>{}</span>".format(_esc(b[1]), _esc(b[0]))
+                    for b in it.get("badges", [])
+                )
+                cards += (
+                    f"<div class='vs-card{' vs-card-win' if win else ''}'>"
+                    f"<div class='vs-site'>{_esc(cfg_e.brand)}{badge}</div>"
+                    f"<div class='vs-metric' style='color:{k['accent']}'>"
+                    f"{_reco_fmt_eur(e['m'], k['d'])}<small> {k['unit']}</small></div>"
+                    f"<h4><a href='{_esc(it['url'])}' target='_blank' rel='noopener'>{_esc(it['produit'])}</a></h4>"
+                    f"<div class='vs-sub'>Format {_esc(it['taille'])} · {_reco_fmt_eur(it.get('prix'))}</div>"
+                    f"<div class='chips'>{chips_html}</div>"
+                    f"<a class='vs-link' href='{reco_href(cfg_e)}'>Voir tout {_esc(cfg_e.brand)} →</a>"
+                    "</div>"
+                )
+            # Honnêteté du match : sur la whey, le meilleur rapport d'un site peut
+            # être une protéine végétale (soja/pois, structurellement moins chère au
+            # kg de protéine) face à une whey laitière chez l'autre. L'écart brut
+            # serait alors trompeur — on le dit explicitement plutôt que de le taire.
+            mixed = m["mixed"]
+            ecart_line = ""
+            if m["ecart"]:
+                ecart_line = (
+                    "<div class='vs-ecart'>Écart entre le meilleur et le moins bon des sites comparés : "
+                    f"<b>{m['ecart']} %</b> sur la même métrique."
+                    + (" ⚠️ Attention, les deux gagnants ne sont pas de la même gamme "
+                       "(une protéine végétale coûte structurellement moins cher au kilo de protéine "
+                       "qu'une whey laitière) : compare à gamme égale sur la page du site."
+                       if mixed else "")
+                    + "</div>"
+                )
+            match_html += (
+                f"<div class='vs-block'><div class='vs-head'>"
+                f"<span class='kind' style='background:{k['soft']};color:{k['accent']}'>{k['icon']} {k['label']}</span>"
+                f"<span class='vs-crit'>Classé sur le <b>{k['unit_long']}</b></span></div>"
+                f"<div class='vs-grid'>{cards}</div>{ecart_line}</div>"
+            )
+
+        # ── Ce que dit l'étude (constats calculés, pas de texte inventé)
+        wins = {}
+        for m in matches:
+            if len(m["entries"]) > 1:
+                wins[m["entries"][0]["site"].brand] = wins.get(m["entries"][0]["site"].brand, 0) + 1
+        win_line = " · ".join(f"<b>{_esc(b)}</b> gagne {n} catégorie{'s' if n > 1 else ''}"
+                              for b, n in sorted(wins.items(), key=lambda x: -x[1])) or "Un seul site comparable pour l'instant."
+        # On ne met en avant que les écarts « à gamme comparable » : annoncer 241 %
+        # alors que l'écart vient d'un soja opposé à une whey serait malhonnête.
+        max_ecart = max((m["ecart"] or 0 for m in matches if not m["mixed"]), default=0)
+        n_deals = sum(1 for s in snaps for it in s["items"] if it.get("isDeal"))
+        findings = [
+            ("🏁", "Aucun site n'est le moins cher partout",
+             f"Sur le dernier relevé : {win_line}. Choisir « son » site une fois pour toutes coûte de l'argent — "
+             "le bon réflexe est de comparer par catégorie de produit."),
+            ("📉", f"Jusqu'à {max_ecart} % d'écart sur un même besoin",
+             "À gamme et métrique comparables, l'écart entre le meilleur et le moins bon site du comparatif "
+             f"atteint {max_ecart} %. C'est bien plus que ce qu'un code promo fait gagner — "
+             "et ça change de mois en mois, donc aucun site n'est « le bon » définitivement."),
+            ("🏷️", "Le prix affiché est trompeur",
+             "Un pot « en promo » peut être plus cher au kg de protéine qu'un pot au prix plein : tout dépend du format "
+             "et du taux de protéines réel. On ne classe donc jamais sur le prix du pot."),
+            ("🔥", f"{n_deals} produit(s) actuellement sous leur moyenne",
+             "Les prix bougent en permanence. On garde l'historique de chaque référence depuis "
+             f"{len(all_dates)} jours pour repérer les vraies baisses des fausses promos."),
+        ]
+        findings_html = "".join(
+            f"<div class='edu-card'><div class='ico'>{i}</div><h4>{_esc(t)}</h4><p>{d}</p></div>"
+            for i, t, d in findings
+        )
+
+        # ── Explorer par site
+        site_cards = "".join(
+            f"<div class='site-card'><h3>{_esc(s['cfg'].brand)}</h3>"
+            f"<div class='vs-sub'>{_esc(s['cfg'].site_domain)} · {s['n_produits']} produits suivis</div>"
+            f"<div class='site-links'><a class='cta sm' href='{reco_href(s['cfg'])}'>Recommandations</a>"
+            f"<a class='cta sm ghost' href='{dash_href(s['cfg'])}'>Dashboard &amp; graphiques</a></div></div>"
+            for s in snaps
+        )
+
+        brands = ", ".join(s["cfg"].brand for s in snaps)
+        return (
+            "<!DOCTYPE html>\n<html lang='fr'>\n<head>\n<meta charset='UTF-8'>\n"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>\n"
+            "<title>Comparatif protéines, créatine &amp; oméga-3 — le vrai prix, mis à jour chaque jour</title>\n"
+            "<meta name='description' content='Comparatif indépendant et quotidien du coût réel de la whey, "
+            "de la créatine et des oméga-3 sur les principaux sites de nutrition sportive.'>\n"
+            f"<style>{RECO_CSS}{COMPARATIF_CSS}</style>\n</head>\n<body>\n"
+            "<header class='hero'><div class='wrap'>"
+            f"<span class='eyebrow'>Comparatif indépendant · {_esc(brands)}</span>"
+            "<h1>Où acheter ses protéines<br>au meilleur prix ?</h1>"
+            "<p class='lead'>On relève chaque jour les prix des principaux sites de nutrition sportive et on les "
+            "compare au <b>vrai coût</b> : le kilo de protéine, le kilo de créatine, le gramme d'EPA+DHA — "
+            "pas le prix du pot.</p>"
+            "<div class='stats'>"
+            f"<div class='stat'><b>{len(snaps)}</b><span>sites comparés</span></div>"
+            f"<div class='stat'><b>{tot_produits}</b><span>produits suivis</span></div>"
+            f"<div class='stat'><b>{len(all_dates)}</b><span>jours d'historique</span></div>"
+            f"<div class='stat'><b>{tot_releves}</b><span>relevés de prix</span></div>"
+            "</div></div></header>\n"
+            "<section><div class='wrap'>"
+            "<div class='sec-head'><h2>⚔️ Le match du jour, catégorie par catégorie</h2>"
+            "<p>Pour chaque besoin, la meilleure offre de chaque site — à métrique identique.</p></div>"
+            f"{match_html}</div></section>\n"
+            "<section style='background:#fff;border-top:1px solid #e7ebf0;border-bottom:1px solid #e7ebf0'><div class='wrap'>"
+            "<div class='sec-head'><h2>📊 Ce que dit l'étude</h2>"
+            "<p>Les constats qui ressortent des relevés, pas des impressions.</p></div>"
+            f"<div class='edu-grid'>{findings_html}</div></div></section>\n"
+            "<section><div class='wrap'>"
+            "<div class='sec-head'><h2>🔍 Explorer site par site</h2>"
+            "<p>Chaque site a sa page : recommandeur interactif selon tes critères, et dashboard complet "
+            "avec l'historique des prix.</p></div>"
+            f"<div class='site-grid'>{site_cards}</div></div></section>\n"
+            "<section style='padding-top:0'><div class='wrap'>"
+            "<div class='method'><h3>Méthodologie, en bref</h3>"
+            "<p>Les prix sont relevés automatiquement chaque matin sur les pages produit publiques, format par "
+            "format. Les whey sont classées au <b>€/kg de protéine</b> (prix ÷ protéines réellement contenues, "
+            "catégorie ≥ 70 % de protéines uniquement) ; les créatines au <b>€/kg de créatine</b> ; les oméga-3 au "
+            "<b>€/g d'EPA+DHA</b> réellement présent, et non au poids d'huile. Les produits en rupture ou retirés "
+            "du catalogue sont exclus des recommandations. "
+            "<a href='https://github.com/Aurel456/whey_price_tracker' target='_blank' rel='noopener'>Le code est ouvert</a> "
+            "— tout est vérifiable et critiquable.</p></div>"
+            "</div></section>\n"
+            "<footer><div class='wrap'>"
+            f"Dernière mise à jour : {today_str}"
+            " &nbsp;·&nbsp; <a href='https://github.com/Aurel456/whey_price_tracker' target='_blank' rel='noopener'>Code source</a>"
+            f"<p class='disclaimer'>Projet personnel, sans affiliation ni lien commercial avec {_esc(brands)}. "
+            "Les prix sont relevés automatiquement et donnés à titre indicatif — vérifie toujours le prix sur le "
+            "site du marchand avant d'acheter.</p></div></footer>\n"
+            "</body>\n</html>\n"
+        )
+
+    docs_dir = sites[0].excel_path.parent / "docs"
+    docs_dir.mkdir(exist_ok=True)
+    out = docs_dir / COMPARATIF_DOCS
+    out.write_text(build(), encoding="utf-8")
+    print(f"Comparatif : {out}")
 
 
 # ── Sanity check pré-commit ───────────────────────────────────────────────────
