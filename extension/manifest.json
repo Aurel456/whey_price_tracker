@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Vrai prix — whey, créatine, oméga-3",
-  "version": "0.2.0",
-  "description": "Affiche le coût réel (€/kg de protéine, €/g d'EPA+DHA…), le classement et l'historique de prix sur les fiches HSN et MyProtein.",
+  "version": "0.3.0",
+  "description": "Affiche le coût réel (€/kg de protéine, €/g d'EPA+DHA…), le classement et l'historique de prix sur les fiches HSN et MyProtein, garde en mémoire les produits consultés et conseille selon tes filtres.",
   "permissions": ["storage"],
-  "host_permissions": ["https://aurel456.github.io/*"],
+  "host_permissions": ["https://aurel456.github.io/*", "https://api.groq.com/*"],
+  "optional_host_permissions": ["https://*/*"],
   "background": {
     "service_worker": "background.js",
     "scripts": ["background.js"]
@@ -16,6 +17,10 @@
       "run_at": "document_idle"
     }
   ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "action": {
     "default_title": "Ouvrir le comparatif des prix"
   },

@@ -86,13 +86,18 @@ Un push qui modifie le code de génération republie le site sans re-scraper. `t
 
 ## Extension navigateur « Vrai prix »
 
-Sur une fiche produit HSN ou MyProtein suivie, un encart affiche pour chaque taille :
+Une bulle **déplaçable** (glisser par l'en-tête ou la pastille, position mémorisée) avec trois onglets :
 
-- le coût réel et le **classement** parmi les références comparables, tous sites confondus ;
-- le prix du jour par rapport à son **plus bas sur 90 jours** et à son plus bas historique ;
-- la **référence la moins chère de la même famille**. Une whey CFM est comparée aux CFM, jamais à un isolat de soja.
+- **Ce produit** (fiche HSN ou MyProtein suivie) :
+  - **« Ta sélection »** suit la taille et le prix affichés sur la page, et recalcule en direct le coût réel et le classement ;
+  - pour chaque taille : coût réel, **classement** parmi les références comparables tous sites confondus, prix comparé à son **plus bas sur 90 jours** ;
+  - la **référence la moins chère de la même famille**. Une whey CFM est comparée aux CFM, jamais à un isolat de soja.
+- **Mes produits** : les fiches suivies que tu as ouvertes, d'une page et d'un onglet à l'autre, avec la sélection vue et le meilleur coût réel du jour. Classées au coût réel quand on filtre par type.
+- **Conseiller** : les meilleures offres au coût réel selon tes filtres (type, site, gamme, sans édulcorant, en stock, budget par pot), et **« Demander à l'IA »**.
 
-L'extension ne lit que `api/v1/prices.json` sur GitHub Pages (mis en cache 1 h). Aucune donnée de navigation n'est envoyée. Le clic sur l'icône ouvre le comparatif.
+L'extension lit `api/v1/prices.json` sur GitHub Pages (mis en cache 1 h). La mémoire reste dans le stockage local du navigateur. Rien n'est envoyé ailleurs, **sauf** quand tu cliques sur « Demander à l'IA » : la question, les filtres, les offres candidates et les produits vus partent alors au serveur LLM configuré.
+
+**Assistant IA** : clic droit sur l'icône → *Options* (ou `about:addons` → Vrai prix → Options). Colle ta clé Groq (ou celle de tout serveur compatible OpenAI), puis *Tester* pour lister les modèles. La clé reste dans le navigateur. **Ne jamais la mettre dans le code** : `.env` est ignoré par git, et une clé placée dans l'extension ou sur le site serait lisible par tous.
 
 Installation en local :
 

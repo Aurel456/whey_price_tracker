@@ -346,6 +346,25 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
     plus proche en poids.
   - Prix identique au relevé → on reprend `metric` du relevé (le scraper arrondit le
     prix au kilo avant de diviser, recalculer donnait un centime d'écart).
+- **v0.3 : bulle déplaçable, mémoire, conseiller, IA.**
+  - Position ancrée au coin bas-droit (`pos = {right, bottom}`), donc réduite ou
+    dépliée, la bulle ne saute pas. Un glisser de plus de 4 px n'est pas un clic
+    (`suppressClick`), sinon lâcher la pastille la dépliait.
+  - Écouteurs **délégués sur le shadow root, posés une seule fois** dans `mount` :
+    `draw()` réécrit `innerHTML` à chaque rendu.
+  - On ne redessine **pas** sur un changement de sélection quand l'onglet affiché
+    n'est pas « Ce produit » : ça effaçait le texte en cours de saisie dans le
+    conseiller. `keydown` est stoppé dans la bulle, pour que les raccourcis du
+    site ne volent pas la frappe.
+  - `seen` (100 produits max), `pos`, `filters` : dans `storage.local`, partagés
+    entre onglets (`storage.onChanged`). Hors fiche suivie, la bulle n'apparaît
+    (réduite) que si `seen` n'est pas vide.
+  - IA : `background.js` (`ask`) appelle `<url>/chat/completions` (API compatible
+    OpenAI, Groq par défaut). La **clé vient uniquement des options**
+    (`storage.local.llm`) : jamais dans le code, le site ou le dépôt (`.env` est
+    ignoré). Le prompt système impose de ne recommander que les offres fournies.
+    Le contexte envoyé est construit par `aiContext()`.
+    Serveur hors Groq → permission d'hôte optionnelle demandée à l'enregistrement.
 - Tester l'encart sans navigateur connecté : script Playwright qui intercepte
   (`page.route`) les URL HSN/MyProtein avec une fausse fiche, sert l'API locale
   et simule `chrome.*` (storage + runtime.sendMessage → listener du background).

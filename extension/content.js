@@ -11,12 +11,20 @@
   const HOST_ID = 'vrai-prix-ext';
   const VISIBLE_SIZES = 4;
   const POLL_MS = 800;
+  const SEEN_MAX = 100;
+  const RECO_SHOWN = 6;
   let lastHref = null;
-  let res = null;          // réponse de l'API pour la page courante
+  let res = null;          // réponse de l'API pour la page courante (product: null hors fiche suivie)
   let live = null;         // {size, price} lus sur la page
   let liveSig = '';
-  let ui = { collapsed: false, expanded: false, closed: false };
+  let ui = { collapsed: false, expanded: false, closed: false, tab: 'product', seenType: 'all' };
   let host = null, root = null;
+  // Persistés dans ext.storage.local, donc partagés entre pages et onglets :
+  let seen = {};           // produits suivis consultés {key: {name, url, site, type, lastSeen, views, sel…}}
+  let pos = { right: 16, bottom: 16 };   // position de la bulle (coin bas-droit)
+  let filters = { type: 'whey', site: 'all', family: 'all', noSweet: false, inStock: true, budget: '' };
+  let data = null;         // API complète, chargée à la demande (onglets Mes produits / Conseiller)
+  let ai = { question: '', loading: false, answer: '', error: '', model: '' };
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -202,15 +210,57 @@
       .card, .pill { --bg:#1b1d22; --ink:#eceef2; --muted:#9aa1ad; --line:#30333a; --soft:#24272d;
         --accent:#7aa7ff; --accent-bg:#1f2a40; --good:#5fd3a2; --good-bg:#173a2c; --warn:#f2b45c; --warn-bg:#3d2c12; }
     }
-    .card { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 340px;
+    /* right / bottom posés en ligne par applyPos() : la bulle se déplace. */
+    .card { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 350px;
       max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto;
       background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
       box-shadow: 0 10px 30px rgba(0,0,0,.18); }
-    .pill { all: unset; position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; cursor: pointer;
+    .pill { all: unset; position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; cursor: grab;
       background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 999px;
-      padding: 7px 12px; box-shadow: 0 6px 18px rgba(0,0,0,.15); font: 600 13px system-ui, sans-serif; }
-    header { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
+      padding: 7px 12px; box-shadow: 0 6px 18px rgba(0,0,0,.15); font: 600 13px system-ui, sans-serif;
+      touch-action: none; user-select: none; }
+    header { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; cursor: grab;
+      touch-action: none; user-select: none; position: sticky; top: 0; background: var(--bg); z-index: 1; }
     header .title { font-weight: 700; flex: 1; }
+    header .grip { color: var(--muted); font-size: 11px; letter-spacing: -2px; }
+    .tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+    .tab { all: unset; cursor: pointer; padding: 6px 8px; font-size: 12px; font-weight: 600; color: var(--muted);
+      border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .tab:hover, .tab:focus-visible { color: var(--ink); }
+    .tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+    .empty { padding: 8px 12px 14px; color: var(--muted); font-size: 12px; margin: 0; }
+    .seg { display: flex; gap: 4px; padding: 0 12px 8px; flex-wrap: wrap; }
+    .seg button { all: unset; cursor: pointer; font-size: 12px; padding: 3px 10px; border-radius: 999px;
+      border: 1px solid var(--line); color: var(--muted); }
+    .seg button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); font-weight: 600; }
+    .frow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 0 12px 8px; font-size: 12px; }
+    .frow select, .frow input[type=number] { font: inherit; color: inherit; background: var(--soft);
+      border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+    .frow input[type=number] { width: 64px; }
+    .frow label { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+    ul.list, ol.list { list-style: none; margin: 0; padding: 0; }
+    .list li { padding: 8px 12px; border-top: 1px solid var(--line); }
+    .list .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+    .list a { color: var(--ink); font-weight: 600; text-decoration: none; }
+    .list a:hover { color: var(--accent); text-decoration: underline; }
+    .list .bot { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; margin-top: 2px; }
+    .tag { display: inline-block; font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--soft);
+      color: var(--muted); margin-left: 4px; vertical-align: 1px; font-weight: 600; }
+    .tag.seen { background: var(--accent-bg); color: var(--accent); }
+    .good { color: var(--good); font-weight: 600; }
+    .linkbtn { all: unset; cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 600; }
+    .linkbtn:hover { text-decoration: underline; }
+    .ai { padding: 10px 12px; border-top: 1px solid var(--line); background: var(--soft); }
+    .ai textarea { width: 100%; box-sizing: border-box; min-height: 52px; resize: vertical; font: inherit; font-size: 12px;
+      color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+    .ai .act { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; gap: 8px; }
+    .ai .ask { all: unset; cursor: pointer; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700;
+      padding: 5px 12px; border-radius: 8px; }
+    .ai .ask[disabled] { opacity: .6; cursor: progress; }
+    .answer { margin-top: 8px; font-size: 12px; line-height: 1.5; background: var(--bg); border: 1px solid var(--line);
+      border-radius: 8px; padding: 8px 10px; }
+    .answer.err { color: var(--warn); }
+    .answer ul { margin: 4px 0; padding-left: 16px; }
     button.icon { all: unset; cursor: pointer; color: var(--muted); padding: 2px 6px; border-radius: 6px; font-size: 15px; }
     button.icon:hover, button.icon:focus-visible { background: var(--soft); color: var(--ink); }
     .name { padding: 0 12px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -304,7 +354,8 @@
     </tr>`;
   }
 
-  function cardHtml() {
+  // ── Onglet « Ce produit » ──────────────────────────────────────────────────
+  function productBody() {
     const { product, metric, site, siteUrl, generated } = res;
     const d = metric ? metric.decimals : 2;
     const sizes = [...product.sizes].sort((a, b) =>
@@ -315,22 +366,222 @@
     const shown = ui.expanded ? sizes : sizes.slice(0, VISIBLE_SIZES);
     if (tracked && !shown.includes(tracked)) shown.push(tracked); // la taille choisie reste visible
     const hidden = sizes.length - shown.length;
-    return `<div class="card" role="complementary" aria-label="Vrai prix">
-      <header><span class="title">💰 Vrai prix</span>
-        <button class="icon collapse" title="Réduire" aria-label="Réduire">–</button>
-        <button class="icon close" title="Masquer sur cette page" aria-label="Masquer">×</button></header>
-      <div class="name" title="${esc(product.name)}">${esc(product.name)}</div>
+    return `<div class="name" title="${esc(product.name)}">${esc(product.name)}</div>
       <div class="unit">${metric ? 'Coût réel en € ' + esc(metric.unit) + ' · ' : ''}relevé du ${frDate(site?.lastScrape || generated)}</div>
       ${live ? liveHtml(live, tracked, lm) : ''}
       <table>${shown.map((s) => rowHtml(s, d, s === tracked)).join('')}</table>
       ${hidden > 0 ? `<button class="more">Voir ${hidden} autre${hidden > 1 ? 's' : ''} taille${hidden > 1 ? 's' : ''}</button>` : ''}
       ${bestLine(ownBest)}
       <footer><span>Prix indicatifs, vérifie sur le site.</span>
-        <a href="${esc(siteUrl + (site?.dashboard || ''))}" target="_blank" rel="noopener">Historique complet →</a></footer>
+        <a href="${esc(siteUrl + (site?.dashboard || ''))}" target="_blank" rel="noopener">Historique complet →</a></footer>`;
+  }
+
+  // ── Mémoire « Mes produits » ───────────────────────────────────────────────
+  // Stockage local de l'extension : partagé entre toutes les pages et tous les
+  // onglets, jamais envoyé nulle part (sauf « Demander à l'IA », cf. options).
+  async function remember(sel) {
+    if (!res?.product) return;
+    const p = res.product;
+    const prev = seen[p.key] || {};
+    const now = Date.now();
+    const visit = sel === undefined;  // appel au chargement de la fiche
+    const pick = visit ? prev.sel : sel && {
+      size: sel.size || trackedFor(sel)?.size || '', price: sel.price, metric: selectionMetric(sel, trackedFor(sel)),
+    };
+    seen[p.key] = {
+      key: p.key, site: p.site, url: p.url, name: p.name, type: p.type, family: p.family,
+      firstSeen: prev.firstSeen || now, lastSeen: now, views: (prev.views || 0) + (visit ? 1 : 0),
+      sel: pick || prev.sel || null,
+    };
+    const old = Object.values(seen).sort((a, b) => b.lastSeen - a.lastSeen).slice(SEEN_MAX);
+    for (const o of old) delete seen[o.key];
+    await ext.storage.local.set({ seen });
+  }
+
+  async function loadData() {
+    if (data || loadData.pending) return;
+    loadData.pending = true;
+    try {
+      data = await ext.runtime.sendMessage({ type: 'data' });
+      if (data?.error) data = null;
+    } finally {
+      loadData.pending = false;
+    }
+    draw();
+  }
+
+  const bestOffer = (p) => p.sizes.filter((s) => s.metric != null && s.inStock)
+    .sort((a, b) => a.metric - b.metric)[0] || null;
+
+  const TYPE_LABEL = { whey: 'Whey', omega3: 'Oméga-3', creatine: 'Créatine' };
+
+  function seenBody() {
+    const items = Object.values(seen);
+    if (!items.length) {
+      return '<p class="empty">Les fiches HSN et MyProtein suivies que tu ouvres s\'ajoutent ici automatiquement, avec la taille et le prix que tu as regardés.</p>';
+    }
+    if (!data) { loadData(); return '<p class="empty">Chargement des prix…</p>'; }
+    const byKey = Object.fromEntries(data.products.map((p) => [p.key, p]));
+    const types = Object.keys(TYPE_LABEL).filter((t) => items.some((i) => i.type === t));
+    const t = types.includes(ui.seenType) ? ui.seenType : 'all';
+    const rows = items.filter((i) => t === 'all' || i.type === t)
+      .map((i) => ({ i, p: byKey[i.key], b: byKey[i.key] && bestOffer(byKey[i.key]) }))
+      // Un type choisi → classement au coût réel (même unité), sinon les plus récents.
+      .sort((x, y) => (t === 'all' ? y.i.lastSeen - x.i.lastSeen
+        : (x.b?.metric ?? Infinity) - (y.b?.metric ?? Infinity)));
+    const seg = `<div class="seg">${[['all', 'Tout'], ...types.map((k) => [k, TYPE_LABEL[k]])]
+      .map(([k, l]) => `<button data-seen-type="${k}" class="${k === t ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    const li = rows.map(({ i, p, b }) => {
+      const m = data.metrics[i.type] || { unit: '', decimals: 2 };
+      const site = data.sites[i.site]?.name || i.site;
+      const when = new Date(i.lastSeen).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+      const sel = i.sel ? `Ta sélection : ${esc(i.sel.size)} · ${num(i.sel.price)} €` : '';
+      const best = b ? `dès <b>${num(b.metric, m.decimals)} €</b>${b.rank ? ` · #${b.rank}/${b.of}` : ''}`
+        : (p ? 'pas de prix en stock' : 'plus suivi');
+      return `<li><div class="top"><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.name)}</a>
+          <button class="icon forget" data-key="${esc(i.key)}" title="Retirer" aria-label="Retirer">×</button></div>
+        <div class="bot"><span class="sub">${esc(site)} · vu le ${when}${i.views > 1 ? ` · ${i.views}×` : ''}</span><span>${best}</span></div>
+        ${sel ? `<div class="sub">${sel}</div>` : ''}</li>`;
+    }).join('');
+    return `${seg}<ul class="list">${li}</ul>
+      <footer><span>${t === 'all' ? 'Du plus récent au plus ancien' : 'Classés au coût réel ' + esc(data.metrics[t]?.unit || '')}</span>
+        <button class="linkbtn clear-seen">Tout effacer</button></footer>`;
+  }
+
+  // ── Onglet « Conseiller » ──────────────────────────────────────────────────
+  function candidates() {
+    const out = [];
+    const budget = parseFloat(filters.budget);
+    for (const p of data.products) {
+      // `ranked` exclut les « aliments enrichis » (crème de riz protéinée…).
+      if (p.type !== filters.type || !p.ranked) continue;
+      if (filters.site !== 'all' && p.site !== filters.site) continue;
+      if (filters.type === 'whey' && filters.family !== 'all' && p.family !== filters.family) continue;
+      if (filters.type === 'whey' && filters.noSweet && !p.tags.includes('sans_edulcorant')) continue;
+      for (const s of p.sizes) {
+        if (s.metric == null || (filters.inStock && !s.inStock)) continue;
+        if (budget > 0 && s.price > budget) continue;
+        out.push({ p, s });
+      }
+    }
+    return out.sort((a, b) => a.s.metric - b.s.metric);
+  }
+
+  function aiContext(list) {
+    const m = data.metrics[filters.type];
+    return {
+      date_releve: data.generated,
+      categorie: m.label,
+      unite_cout_reel: '€ ' + m.unit,
+      filtres: {
+        site: filters.site === 'all' ? 'tous' : data.sites[filters.site]?.name,
+        gamme: filters.family === 'all' ? 'toutes' : data.families[filters.family],
+        sans_edulcorant: filters.noSweet, en_stock: filters.inStock,
+        budget_max_par_pot_eur: parseFloat(filters.budget) || null,
+      },
+      offres: list.slice(0, 12).map(({ p, s }) => ({
+        nom: p.name, site: data.sites[p.site]?.name, taille: s.size, prix_eur: s.price,
+        cout_reel: Number(s.metric.toFixed(m.decimals)), rang: s.rank ? `${s.rank}/${s.of}` : null,
+        plus_bas_90j_eur: s.min90, au_plus_bas: s.price <= s.min90 + 1e-9, tags: p.tags,
+        deja_consulte: Boolean(seen[p.key]), url: p.url,
+      })),
+      produits_consultes: Object.values(seen).sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 10).map((i) => ({
+        nom: i.name, site: data.sites[i.site]?.name, type: i.type,
+        selection: i.sel ? `${i.sel.size} à ${i.sel.price} €` : null,
+      })),
+    };
+  }
+
+  // Markdown minimal de la réponse : gras, listes, retours à la ligne (après échappement).
+  function mdLite(text) {
+    const lines = esc(text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').split('\n');
+    let html = '', inList = false;
+    for (const line of lines) {
+      const item = line.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/);
+      if (item) { html += (inList ? '' : '<ul>') + `<li>${item[1]}</li>`; inList = true; continue; }
+      if (inList) { html += '</ul>'; inList = false; }
+      if (line.trim()) html += line + '<br>';
+    }
+    return html + (inList ? '</ul>' : '');
+  }
+
+  function recoBody() {
+    if (!data) { loadData(); return '<p class="empty">Chargement des offres…</p>'; }
+    const list = candidates();
+    const m = data.metrics[filters.type];
+    const seg = `<div class="seg">${Object.entries(TYPE_LABEL).map(([k, l]) =>
+      `<button data-reco-type="${k}" class="${k === filters.type ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    const siteSel = `<select data-f="site" aria-label="Site"><option value="all">Tous les sites</option>${
+      Object.entries(data.sites).map(([k, s]) => `<option value="${k}"${filters.site === k ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}</select>`;
+    const famSel = filters.type !== 'whey' ? '' : `<select data-f="family" aria-label="Gamme"><option value="all">Toutes gammes</option>${
+      Object.entries(data.families).filter(([k]) => k.startsWith('whey:'))
+        .map(([k, l]) => `<option value="${k}"${filters.family === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    const checks = `${filters.type === 'whey' ? `<label><input type="checkbox" data-f="noSweet"${filters.noSweet ? ' checked' : ''}> Sans édulcorant</label>` : ''}
+      <label><input type="checkbox" data-f="inStock"${filters.inStock ? ' checked' : ''}> En stock</label>
+      <label>Pot ≤ <input type="number" min="0" step="1" data-f="budget" value="${esc(filters.budget)}" placeholder="—"> €</label>`;
+    const li = list.slice(0, RECO_SHOWN).map(({ p, s }, idx) => {
+      const low = s.min90 != null && s.price <= s.min90 + 1e-9;
+      return `<li><div class="top"><span>${idx + 1}. <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.name)}</a>${
+        seen[p.key] ? '<span class="tag seen">déjà vu</span>' : ''}</span>
+          <b>${num(s.metric, m.decimals)} €</b></div>
+        <div class="bot"><span class="sub">${esc(data.sites[p.site]?.name || p.site)} · ${esc(s.size)} · ${num(s.price)} €${
+          low ? ' · <span class="good">plus bas 90 j</span>' : ''}</span><span class="sub">${s.rank ? `#${s.rank}/${s.of}` : ''}</span></div></li>`;
+    }).join('');
+    const results = list.length
+      ? `<ol class="list">${li}</ol>`
+      : '<p class="empty">Aucune offre ne correspond à ces filtres.</p>';
+    let answer = '';
+    if (ai.error === 'NO_KEY') {
+      answer = '<div class="answer err">Ajoute ta clé API dans les options de l\'extension. <button class="linkbtn open-options">Ouvrir les options</button></div>';
+    } else if (ai.error) {
+      answer = `<div class="answer err">${esc(ai.error)}</div>`;
+    } else if (ai.answer) {
+      answer = `<div class="answer">${mdLite(ai.answer)}<div class="sub">Réponse générée par ${esc(ai.model)} à partir des offres ci-dessus — vérifie avant d'acheter.</div></div>`;
+    }
+    return `${seg}<div class="frow">${siteSel}${famSel}</div><div class="frow">${checks}</div>
+      <div class="unit">${list.length} offre${list.length > 1 ? 's' : ''} · coût réel en € ${esc(m.unit)}</div>
+      ${results}
+      <div class="ai">
+        <textarea class="q" placeholder="Ex. : whey pour 2 mois sans sucralose, la moins chère au coût réel ?">${esc(ai.question)}</textarea>
+        <div class="act"><span class="sub">L'IA ne choisit que parmi ces offres.</span>
+          <button class="ask"${ai.loading ? ' disabled' : ''}>${ai.loading ? 'Réflexion…' : 'Demander à l\'IA'}</button></div>
+        ${answer}
+      </div>`;
+  }
+
+  async function askAI() {
+    if (!data || ai.loading) return;
+    ai = { ...ai, loading: true, answer: '', error: '' };
+    draw();
+    const question = ai.question.trim() || 'Quelle est la meilleure option pour moi avec ces filtres ?';
+    try {
+      const r = await ext.runtime.sendMessage({ type: 'ask', question, context: aiContext(candidates()) });
+      ai = { ...ai, loading: false, answer: r.answer || '', error: r.error || '', model: r.model || '' };
+    } catch (err) {
+      ai = { ...ai, loading: false, error: String(err) };
+    }
+    draw();
+  }
+
+  // ── Bulle : rendu ──────────────────────────────────────────────────────────
+  function cardHtml() {
+    const n = Object.keys(seen).length;
+    const tabs = [res?.product && ['product', 'Ce produit'], ['seen', `Mes produits${n ? ` (${n})` : ''}`],
+      ['reco', 'Conseiller']].filter(Boolean);
+    const body = ui.tab === 'product' && res?.product ? productBody()
+      : ui.tab === 'reco' ? recoBody() : seenBody();
+    return `<div class="card" role="complementary" aria-label="Vrai prix">
+      <header title="Glisser pour déplacer"><span class="grip" aria-hidden="true">⋮⋮</span><span class="title">💰 Vrai prix</span>
+        <button class="icon collapse" title="Réduire" aria-label="Réduire">–</button>
+        <button class="icon close" title="Masquer sur cette page" aria-label="Masquer">×</button></header>
+      <nav class="tabs" role="tablist">${tabs.map(([k, l]) =>
+        `<button role="tab" class="tab${ui.tab === k ? ' on' : ''}" data-tab="${k}" aria-selected="${ui.tab === k}">${l}</button>`).join('')}</nav>
+      ${body}
     </div>`;
   }
 
   function pillText() {
+    if (!res?.product) return `💰 Mes produits (${Object.keys(seen).length})`;
     const d = res.metric ? res.metric.decimals : 2;
     const unit = res.metric?.unit || '';
     const tracked = trackedFor(live);
@@ -344,14 +595,97 @@
     if (!root) return;
     const scroll = root.querySelector('.card')?.scrollTop || 0;
     root.innerHTML = `<style>${STYLE}</style>` + (ui.collapsed
-      ? `<button class="pill" title="Afficher le vrai prix">${esc(pillText())}</button>`
+      ? `<button class="pill" title="Afficher (glisser pour déplacer)">${esc(pillText())}</button>`
       : cardHtml());
     const card = root.querySelector('.card');
     if (card) card.scrollTop = scroll;
-    root.querySelector('.pill')?.addEventListener('click', () => setCollapsed(false));
-    root.querySelector('.collapse')?.addEventListener('click', () => setCollapsed(true));
-    root.querySelector('.close')?.addEventListener('click', () => { ui.closed = true; host.remove(); host = null; });
-    root.querySelector('.more')?.addEventListener('click', () => { ui.expanded = true; draw(); });
+    applyPos();
+  }
+
+  // ── Bulle : déplacement ────────────────────────────────────────────────────
+  // Ancrée par son coin bas-droit (right / bottom) : réduite ou dépliée, elle
+  // reste au même endroit. Poignée = en-tête de la carte, ou la pastille.
+  let drag = null, suppressClick = false;
+
+  const clampPos = (p) => ({
+    right: Math.round(Math.min(Math.max(0, p.right), innerWidth - 80)),
+    bottom: Math.round(Math.min(Math.max(0, p.bottom), innerHeight - 40)),
+  });
+
+  function applyPos() {
+    const el = root?.querySelector('.card, .pill');
+    if (!el) return;
+    el.style.right = pos.right + 'px';
+    el.style.bottom = pos.bottom + 'px';
+    if (el.classList.contains('card')) el.style.maxHeight = `calc(100vh - ${pos.bottom + 16}px)`;
+  }
+
+  function onPointerDown(e) {
+    if (e.button !== 0 || !e.target.closest('header, .pill') || e.target.closest('header button')) return;
+    drag = { x: e.clientX, y: e.clientY, start: { ...pos }, moved: false };
+    addEventListener('pointermove', onPointerMove);
+    addEventListener('pointerup', onPointerUp, { once: true });
+  }
+
+  function onPointerMove(e) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;  // simple clic, pas un glisser
+    drag.moved = true;
+    pos = clampPos({ right: drag.start.right - dx, bottom: drag.start.bottom - dy });
+    applyPos();
+  }
+
+  function onPointerUp() {
+    removeEventListener('pointermove', onPointerMove);
+    if (drag?.moved) {
+      ext.storage.local.set({ pos });
+      suppressClick = true;  // le clic qui suit un glisser ne doit pas déplier la pastille
+      setTimeout(() => { suppressClick = false; }, 50);
+    }
+    drag = null;
+  }
+
+  // ── Bulle : interactions (délégation sur le shadow root, posée une fois) ───
+  function onClick(e) {
+    if (suppressClick) return;
+    const t = e.target;
+    const tab = t.closest('[data-tab]');
+    if (tab) { ui.tab = tab.dataset.tab; draw(); return; }
+    if (t.closest('.pill')) return setCollapsed(false);
+    if (t.closest('.collapse')) return setCollapsed(true);
+    if (t.closest('.close')) { ui.closed = true; host.remove(); host = root = null; return; }
+    if (t.closest('.more')) { ui.expanded = true; draw(); return; }
+    const st = t.closest('[data-seen-type]');
+    if (st) { ui.seenType = st.dataset.seenType; draw(); return; }
+    const rt = t.closest('[data-reco-type]');
+    if (rt) { setFilter('type', rt.dataset.recoType); return; }
+    const fg = t.closest('.forget');
+    if (fg) { delete seen[fg.dataset.key]; ext.storage.local.set({ seen }); draw(); return; }
+    if (t.closest('.clear-seen')) { seen = {}; ext.storage.local.set({ seen }); draw(); return; }
+    if (t.closest('.ask')) { askAI(); return; }
+    if (t.closest('.open-options')) ext.runtime.sendMessage({ type: 'openOptions' });
+  }
+
+  function setFilter(key, value) {
+    filters = { ...filters, [key]: value };
+    if (key === 'type') filters.family = 'all';
+    ext.storage.local.set({ filters });
+    draw();
+  }
+
+  function onChange(e) {
+    const f = e.target.dataset?.f;
+    if (f) setFilter(f, e.target.type === 'checkbox' ? e.target.checked : e.target.value);
+  }
+
+  function onInput(e) {
+    if (e.target.classList?.contains('q')) ai.question = e.target.value;  // pas de redessin pendant la saisie
+  }
+
+  function onKeyDown(e) {
+    // Les raccourcis clavier du site (recherche, etc.) ne doivent pas voler la frappe.
+    e.stopPropagation();
+    if (e.target.classList?.contains('q') && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) askAI();
   }
 
   function setCollapsed(value) {
@@ -360,18 +694,33 @@
     draw();
   }
 
+  // ── Cycle de vie ───────────────────────────────────────────────────────────
   async function mount(response) {
     host?.remove();
     host = root = null;
-    res = response && response.product ? response : null;
-    if (!res) return;
-    const { collapsed } = await ext.storage.local.get('collapsed');
-    ui = { collapsed: Boolean(collapsed), expanded: false, closed: false };
+    res = response && !response.error ? response : null;
+    const stored = await ext.storage.local.get(['collapsed', 'seen', 'pos', 'filters']);
+    seen = stored.seen || {};
+    pos = clampPos(stored.pos || pos);
+    filters = { ...filters, ...(stored.filters || {}) };
+    // Hors fiche suivie : la bulle n'apparaît (réduite) que s'il y a un historique.
+    if (!res?.product && !Object.keys(seen).length) return;
+    ui = {
+      collapsed: res?.product ? Boolean(stored.collapsed) : true,
+      expanded: false, closed: false, tab: res?.product ? 'product' : 'seen', seenType: 'all',
+    };
     host = document.createElement('div');
     host.id = HOST_ID;
     root = host.attachShadow({ mode: 'open' });
-    live = readLive();
+    root.addEventListener('click', onClick);
+    root.addEventListener('change', onChange);
+    root.addEventListener('input', onInput);
+    root.addEventListener('keydown', onKeyDown);
+    root.addEventListener('pointerdown', onPointerDown);
+    live = res?.product ? readLive() : null;
     liveSig = JSON.stringify(live);
+    if (res?.product) await remember();
+    if (live) await remember(live);
     draw();
     document.documentElement.appendChild(host);
   }
@@ -385,16 +734,26 @@
         .catch(() => { /* API injoignable : on n'affiche rien plutôt qu'une erreur */ });
       return;
     }
-    if (!res || ui.closed) return;
-    // Sélection modifiée sur la page (taille, arôme, promo) → on redessine.
+    if (!res?.product || !root || ui.closed) return;
+    // Sélection modifiée sur la page (taille, arôme, promo) → mémorisée, et
+    // redessinée si elle est visible (pas pendant qu'on tape dans le conseiller).
     const now = readLive();
     const sig = JSON.stringify(now);
     if (sig !== liveSig) {
       live = now;
       liveSig = sig;
-      draw();
+      if (now) remember(now);
+      if (ui.collapsed || ui.tab === 'product') draw();
     }
   }
+
+  // Les autres onglets du navigateur peuvent ajouter des produits vus.
+  ext.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.seen || !root) return;
+    seen = changes.seen.newValue || {};
+    if (ui.tab === 'seen' && !ui.collapsed) draw();
+  });
+  addEventListener('resize', () => { pos = clampPos(pos); applyPos(); });
 
   tick();
   // Lecture régulière : URL (MyProtein navigue parfois sans recharger) et

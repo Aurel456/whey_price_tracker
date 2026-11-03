@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vrai prix — options</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#16181d; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; --good:#0f7a55; --bad:#b42318; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#131417; --card:#1b1d22; --ink:#eceef2; --muted:#9aa1ad; --line:#30333a; --accent:#7aa7ff; --good:#5fd3a2; --bad:#ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 620px; margin: 32px auto; padding: 0 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 20px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 12px 0 4px; }
+  input { width: 100%; padding: 8px 10px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  button { font: inherit; font-weight: 600; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #status { margin-top: 12px; min-height: 1.5em; font-size: 13px; }
+  .ok { color: var(--good); } .err { color: var(--bad); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>💰 Vrai prix — options</h1>
+  <p class="lead">Réglages de l'assistant IA du conseiller. Tout le reste de l'extension fonctionne sans.</p>
+
+  <section>
+    <h2>Assistant IA (API compatible OpenAI)</h2>
+    <label for="url">URL du serveur</label>
+    <input id="url" type="url" placeholder="https://api.groq.com/openai/v1">
+    <label for="key">Clé API</label>
+    <input id="key" type="password" autocomplete="off" placeholder="gsk_…">
+    <p class="hint">La clé reste dans le stockage local de ce navigateur. Elle n'est envoyée qu'au serveur ci-dessus.</p>
+    <label for="model">Modèle</label>
+    <input id="model" list="models" placeholder="llama-3.3-70b-versatile">
+    <datalist id="models"></datalist>
+    <p class="hint">« Tester » liste les modèles disponibles avec ta clé.</p>
+    <div class="row">
+      <button class="primary" id="save">Enregistrer</button>
+      <button id="test">Tester</button>
+      <button id="forget">Effacer la clé</button>
+    </div>
+    <div id="status" role="status"></div>
+  </section>
+
+  <section>
+    <h2>Ce qui est envoyé quand tu cliques sur « Demander à l'IA »</h2>
+    <ul>
+      <li>ta question et les filtres choisis ;</li>
+      <li>les offres candidates (nom, site, taille, prix, coût réel, classement) ;</li>
+      <li>les produits que tu as consultés (nom, site, taille et prix vus).</li>
+    </ul>
+    <p class="hint">Rien d'autre : pas d'historique de navigation, pas de donnée personnelle. Rien n'est envoyé tant que tu ne cliques pas.</p>
+  </section>
+</main>
+<script src="options.js"></script>
+</body>
+</html>
