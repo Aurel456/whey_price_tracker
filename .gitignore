@@ -5,6 +5,10 @@ __pycache__/
 .venv/
 venv/
 
+# Secrets (clés Groq, etc.) — ne JAMAIS versionner
+.env
+.env.*
+
 # Editor / tooling
 .kilo/
 .vscode/
