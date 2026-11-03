@@ -42,6 +42,7 @@ async function lookup(url) {
     // la whey) : une whey CFM n'est jamais comparée à un isolat de soja.
     best: data.best[product.family] || [],
     familyLabel: data.families[product.family] || '',
+    ranking: (data.ranking || {})[product.family] || [],
     metric: data.metrics[product.type] || null,
     site: data.sites[product.site],
     sites: data.sites,

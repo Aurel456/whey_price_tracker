@@ -119,7 +119,9 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 - **Toujours scoper à `.product-info-main`** (ou `#addtocart-wrapper` qui est unique). La page contient des produits cross-sell ("Vous aimerez aussi") qui ont **chacun** un `.stock-info-container` et des boutons "Ajouter maintenant" — un check global produit des faux résultats.
 - Le check (`_STOCK_CHECK_JS`) est **par variante** : il s'exécute après le click legacy ou le `select_option` qui sélectionne la variante. Sinon on lit l'état de la variante par défaut pour toutes les tailles.
 - Pour la méthode SELECT (HSN ~2025+), il faut programmatiquement `page.select_option(...)` avant le check stock, sinon le DOM reste figé sur la variante par défaut. Coût ≈ CLICK_WAIT × N variantes (acceptable).
-- Le `<select id=selectProductSimple>` capture aussi des options de cross-sell (sur evoexcel : 152 options vs ~6 pour le produit). La dédup par taille dans `scrape_product` masque le problème en pratique, mais `select_option` peut cibler le mauvais select sur ce genre de page — à surveiller.
+- **Produits associés = pollution (corrigé 2026-11-03)** : la fiche embarque des produits associés dans des `form#product_related_addtocart_form_*`, chacun avec ses variantes, ses `<select>` (« Isolat de soja 2.0 2kg bonbon… » sur la fiche soja elle-même) et ses `[data-price-type=finalPrice]`. Le scraper cherchait dans tout le document. Conséquences dans l'historique : des tailles d'AUTRES produits rattachées au produit (la créatine 500 mesh avait « 1Kg », « 150g » et « 240 veg caps »), des « 2kg » en minuscules et des 500g sans prix (soja 2.0 sans prix 500g tous les jours depuis 2026-07-30). **Toujours limiter la recherche à `_MAIN_FORM_SEL`** (`form[id^="product_addtocart_form"]`, le préfixe exclut `product_related_…`).
+- **Prix affiché du produit principal = `#product-price-<id> .price`** (id = `input[name=product]` du formulaire principal, bloc `#sticky-add-to-cart`), mis à jour en JS au changement de taille. Les `[data-price-type=finalPrice]` de `.product-info-main` appartiennent aux produits associés et ne bougent pas au clic. `_MAIN_PRICE_JS` sert de filet de sécurité quand le spconfig n'a pas le prix d'une option (diagnostic dans `errors.log`). L'extension (`READERS['www.hsnstore.fr']`) utilise les mêmes sélecteurs.
+- Le chemin `<select>` n'était pris qu'en CI, alors qu'en local (Windows, 5 UA testés) on passe toujours par les inputs : cause non reproduite. `log_error` trace maintenant le basculement (« méthode <select> ») : regarder `errors.log` dans le run CI avant de toucher à nouveau ce code.
 - La colonne `En stock` vaut `True` par défaut (conservateur : mieux manquer une rupture que de faux-positifs).
 - Les tailles `Pack` / `Monodose` sont déjà exclues via `SIZE_EXCLUDE_RE` avant la boucle — leur état stock n'a pas à être vérifié.
 
@@ -330,6 +332,20 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
     quand la page hôte est en mode quirks → `table { font: inherit; color: inherit }` ;
   - une sparkline de prix est illisible sur HSN, qui alterne promo et prix
     normal tous les 2-3 jours (effet code-barres). D'où la jauge min ↔ max sur 90 jours.
+- **Mode interactif (« Ta sélection », v0.2)** : `content.js` lit toutes les 800 ms
+  la taille et le prix **affichés** (`READERS` par site) et recalcule le coût
+  réel avec `product.nutri` (mêmes formules que `_enrich_row`), plus le rang
+  avec `ranking[family]` (la sélection remplace sa propre ligne).
+  - HSN : input coché du formulaire principal + `#product-price-<id>`.
+  - MyProtein : `button[data-e2e=product_add-to-basket]` porte le `data-sku` de la
+    variante choisie, et le JSON-LD `hasVariant` donne son nom et son prix. Les
+    boutons `elements-variations-button` existent AUSSI dans la section « souvent
+    achetés ensemble » (sans texte) : ne pas les lire en vrac.
+  - `sameSize` compare d'abord les portions (le poids MyProtein varie selon l'arôme),
+    puis les gélules, puis le poids à 3 % près. Entre plusieurs candidats, on garde le
+    plus proche en poids.
+  - Prix identique au relevé → on reprend `metric` du relevé (le scraper arrondit le
+    prix au kilo avant de diviser, recalculer donnait un centime d'écart).
 - Tester l'encart sans navigateur connecté : script Playwright qui intercepte
   (`page.route`) les URL HSN/MyProtein avec une fausse fiche, sert l'API locale
   et simule `chrome.*` (storage + runtime.sendMessage → listener du background).
