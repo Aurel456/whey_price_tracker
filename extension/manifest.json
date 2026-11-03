@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Vrai prix — whey, créatine, oméga-3",
+  "version": "0.1.0",
+  "description": "Affiche le coût réel (€/kg de protéine, €/g d'EPA+DHA…), le classement et l'historique de prix sur les fiches HSN et MyProtein.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://aurel456.github.io/*"],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.hsnstore.fr/*", "https://fr.myprotein.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Ouvrir le comparatif des prix"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "vrai-prix@aurel456.github.io",
+      "strict_min_version": "121.0"
+    }
+  }
+}

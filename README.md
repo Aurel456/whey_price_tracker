@@ -1,8 +1,17 @@
 # HSN Price Tracker
 
-Scrape les prix des produits de nutrition sportive sur [HSNstore.fr](https://www.hsnstore.fr) et génère un suivi dans un fichier Excel + un dashboard HTML. Couvre **whey & protéines**, **oméga-3** et **créatine** avec des métriques de coût adaptées à chaque type.
+Relève chaque jour les prix de la nutrition sportive sur [HSNstore.fr](https://www.hsnstore.fr) et [MyProtein](https://fr.myprotein.com), calcule le **coût réel** (€/kg de protéine, €/g d'EPA+DHA, €/kg de créatine) et publie un site comparatif, des dashboards et une API utilisée par une extension navigateur. Couvre **whey & protéines**, **oméga-3** et **créatine**.
 
-Repo : [github.com/Aurel456/whey_price_tracker](https://github.com/Aurel456/whey_price_tracker)
+- Site : [aurel456.github.io/whey_price_tracker](https://aurel456.github.io/whey_price_tracker/)
+- Repo : [github.com/Aurel456/whey_price_tracker](https://github.com/Aurel456/whey_price_tracker)
+
+```text
+GitHub Actions (9h UTC)
+  hsn_tracker.py ─┐                       ┌─ docs/index.html          accueil comparatif
+                  ├─► data/*.csv ─► build.py ─┼─ docs/{hsn,myprotein}.html  recommandations
+  myprotein_…py ──┘   (versionné)          ├─ docs/*dashboard.html     dashboards
+                                          └─ docs/api/v1/prices.json  ─► extension/
+```
 
 ## Fonctionnement
 
@@ -24,38 +33,73 @@ Repo : [github.com/Aurel456/whey_price_tracker](https://github.com/Aurel456/whey
    - **Type whey** : isolat CFM, hydrolysat, concentré, native, caséine, végétal, mix
    - **Type oméga** : forme TG / EE, certification IFOS
    - **Type créatine** : Creapure®, monohydrate, mesh 100/200/500
-6. Ajoute les données du jour dans `whey_prices.xlsx` (feuille "Historique") puis génère `docs/dashboard.html` (onglets Whey / Oméga-3 / Créatine, graphiques Chart.js, tendances, badge deal)
+6. Ajoute les données du jour dans `data/hsn_prices.csv` (+ les fiches produit dans `data/hsn_products.csv`) puis génère `docs/dashboard.html` (onglets Whey / Oméga-3 / Créatine, graphiques Chart.js, tendances, badge deal)
 
 Les variantes "Monodose" et "Pack" sont automatiquement exclues.
 
 ## Utilisation
 
 ```bash
-# Installation (avec uv)
-uv venv
-uv pip install -r requirements.txt
-playwright install chromium
+# Installation (env conda du projet, cf. AGENTS.md)
+pip install -r requirements.txt -r requirements-dev.txt
+python -m playwright install chromium
 
-# Activation puis lancement
-source .venv/bin/activate    # Linux/macOS
-.venv\Scripts\activate       # Windows
-python hsn_tracker.py
+python hsn_tracker.py         # relevé HSN       → data/hsn_*.csv
+python myprotein_tracker.py   # relevé MyProtein → data/myprotein_*.csv
+python build.py               # régénère tout docs/ depuis data/ (sans scraper)
+python build.py --health      # bilan du relevé du jour (exit 1 si anomalie)
+python build.py --excel       # exporte l'historique en .xlsx dans exports/
+python -m pytest              # tests (parsing, stockage, API)
 ```
+
+Ouvrir `docs/index.html` en local fonctionne tel quel (liens relatifs).
 
 ## Fichiers
 
 | Fichier | Rôle | Versionné |
 | ------ | --- | --- |
-| `hsn_tracker.py` | Script principal (scraping + Excel + dashboard) | ✓ |
-| `requirements.txt` | Dépendances Python | ✓ |
-| `whey_prices.xlsx` | Historique des prix (créé automatiquement) | ✓ |
-| `docs/index.html` | Accueil GitHub Pages = comparatif multi-sites (généré automatiquement) | ✓ |
-| `docs/hsn.html` | Page recommandations HSN sur GitHub Pages (généré automatiquement) | ✓ |
-| `docs/dashboard.html` | Dashboard technique servi par GitHub Pages (généré automatiquement) | ✓ |
+| `hsn_tracker.py` | Scraping HSN + couche partagée (stockage, dashboard, reco, comparatif, API) | ✓ |
+| `myprotein_tracker.py` | Scraping MyProtein | ✓ |
+| `build.py` | Régénère le site complet, bilan de santé, export Excel | ✓ |
+| `data/<site>_prices.csv` | Historique des prix : une ligne par (jour, produit, taille) | ✓ |
+| `data/<site>_products.csv` | Fiche produit par URL (ingrédients, profil AA…) | ✓ |
+| `extension/` | Extension navigateur « Vrai prix » | ✓ |
+| `tests/` | Tests pytest | ✓ |
+| `docs/` | Site généré (accueil, recos, dashboards, `api/v1/prices.json`) | ✗ (publié par la CI) |
+| `exports/` | Exports `.xlsx` à la demande | ✗ |
 | `descriptions.json` | Descriptions courtes / mots-clés des produits (optionnel) | ✓ |
 | `tags.json` | Labels persos + notes par produit (édité depuis le dashboard) | ✓ |
 
-`whey_prices.xlsx` et les pages de `docs/` sont versionnés : chaque mise à jour de prix produit un commit, créant un historique git complet de l'évolution des prix.
+Seul `data/` est versionné : chaque relevé ajoute quelques Ko de lignes CSV, donc l'historique git reste léger (avant 2026-11, l'Excel binaire et les pages HTML de 2 Mo étaient recommittés chaque jour, soit environ 1 Mo de plus par jour pour le dépôt).
+
+## Automatisation (GitHub Actions)
+
+`.github/workflows/track-prices.yml`, tous les jours à 9h UTC :
+
+1. lance les deux trackers en parallèle ;
+2. `python build.py` reconstruit `docs/` ;
+3. committe `data/` ;
+4. publie `docs/` sur GitHub Pages (source « GitHub Actions » dans Settings → Pages) ;
+5. **fait échouer le run, et donc t'envoie un email**, si un tracker a planté, si un site n'a rien relevé ou s'il a relevé moins de 75 % de sa médiane sur 7 jours. Le bilan s'affiche en tête du run.
+
+Un push qui modifie le code de génération republie le site sans re-scraper. `tests.yml` lance pytest à chaque push.
+
+## Extension navigateur « Vrai prix »
+
+Sur une fiche produit HSN ou MyProtein suivie, un encart affiche pour chaque taille :
+
+- le coût réel et le **classement** parmi les références comparables, tous sites confondus ;
+- le prix du jour par rapport à son **plus bas sur 90 jours** et à son plus bas historique ;
+- la **référence la moins chère de la même famille**. Une whey CFM est comparée aux CFM, jamais à un isolat de soja.
+
+L'extension ne lit que `api/v1/prices.json` sur GitHub Pages (mis en cache 1 h). Aucune donnée de navigation n'est envoyée. Le clic sur l'icône ouvre le comparatif.
+
+Installation en local :
+
+- **Chrome / Edge / Brave** : `chrome://extensions` → activer le *Mode développeur* → *Charger l'extension non empaquetée* → choisir le dossier `extension/`.
+- **Firefox** : `about:debugging#/runtime/this-firefox` → *Charger un module complémentaire temporaire* → choisir `extension/manifest.json`.
+
+Le format de l'API est versionné (`v1`) : ne renommer aucun champ sans publier un `v2/` à côté, car les extensions installées ne se mettent pas à jour en même temps que le site.
 
 ## Dashboard
 
@@ -95,7 +139,7 @@ Format :
 }
 ```
 
-Au prochain `python hsn_tracker.py`, les valeurs de `tags.json` sont relues et injectées dans le dashboard.
+Au prochain `python build.py`, les valeurs de `tags.json` sont relues et injectées dans le dashboard.
 
 ## Configuration
 
@@ -124,15 +168,15 @@ Paramètres ajustables en haut du script :
 ## Suivi MyProtein (second site)
 
 En plus de HSN, le projet suit [fr.myprotein.com](https://fr.myprotein.com) via un
-script séparé `myprotein_tracker.py`. Il **réutilise toute la couche Excel +
+script séparé `myprotein_tracker.py`. Il **réutilise toute la couche stockage +
 dashboard + recommandations** de `hsn_tracker.py` (via un `SiteConfig` dédié), mais
 avec un scraping spécifique à la plateforme THG de MyProtein et des **fichiers de
 sortie séparés** :
 
 | Fichier | Rôle |
 | ------ | --- |
-| `myprotein_tracker.py` | Script MyProtein (scraping + Excel + dashboard) |
-| `myprotein_prices.xlsx` | Historique des prix MyProtein |
+| `myprotein_tracker.py` | Script MyProtein (scraping + dashboard) |
+| `data/myprotein_*.csv` | Historique des prix + fiches produit MyProtein |
 | `docs/myprotein-dashboard.html` | Dashboard MyProtein |
 | `docs/myprotein.html` | Page recommandations MyProtein |
 
@@ -149,10 +193,10 @@ Particularités :
   oméga : par **nb de gélules** (cf. AGENTS.md pour le pourquoi).
 - MyProtein **ne publie pas de profil d'acides aminés** → la colonne €/3g leucine
   reste vide (les métriques €/kg protéine et €/30g protéine fonctionnent).
-- Le workflow GitHub Actions lance les deux trackers à la suite et commit leurs
-  fichiers ensemble. `myprotein_tracker.py` régénère aussi la page d'accueil
-  (comparatif multi-sites) en fin de run : c'est le seul module qui connaît les
-  deux `SiteConfig`, donc lancer `hsn_tracker.py` seul ne met pas l'accueil à jour.
+- Le workflow GitHub Actions lance les deux trackers en parallèle puis
+  `build.py`, qui régénère l'accueil (comparatif multi-sites) et l'API. C'est le
+  seul module qui connaît tous les `SiteConfig`, donc après un tracker lancé
+  seul en local, il faut relancer `python build.py` pour mettre l'accueil à jour.
 
 ## Catégories
 

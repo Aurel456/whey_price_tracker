@@ -12,7 +12,11 @@ venv/
 .claude/
 
 # Generated output
-# whey_prices.xlsx et whey_dashboard.html sont versionnés (suivi de prix dans git)
+# Seul data/ est versionné (historique des prix). Le site docs/ est reconstruit
+# par build.py et publié en artefact GitHub Pages à chaque run.
+docs/
+exports/
+.pytest_cache/
 errors.log
 myprotein_errors.log
 

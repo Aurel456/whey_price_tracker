@@ -5,9 +5,15 @@ on:
     # Tous les jours à 9h UTC (10h Paris hiver / 11h Paris été)
     - cron: '0 9 * * *'
   workflow_dispatch:  # déclenchement manuel depuis l'onglet Actions
+  push:
+    # Republie le site quand le code de génération change (sans re-scraper).
+    branches: [main]
+    paths: ['hsn_tracker.py', 'myprotein_tracker.py', 'build.py', '.github/workflows/track-prices.yml']
 
 permissions:
-  contents: write  # nécessaire pour commit + push
+  contents: write  # commit de data/
+  pages: write     # déploiement GitHub Pages
+  id-token: write  # requis par actions/deploy-pages
 
 # Force les actions JavaScript sur Node 24 (Node 20 sera retiré en sept 2026)
 env:
@@ -21,6 +27,9 @@ jobs:
   track:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,33 +46,37 @@ jobs:
           pip install -r requirements.txt
 
       - name: Cache Playwright browsers
+        if: github.event_name != 'push'
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}
 
       - name: Install Playwright Chromium
+        if: github.event_name != 'push'
         run: python -m playwright install --with-deps chromium
 
       - name: Run trackers (HSN + MyProtein en parallèle)
-        # Les deux scripts écrivent des fichiers disjoints (Excel/HTML/logs séparés)
-        # → aucune contention. On les lance en arrière-plan et on attend les deux.
-        # Temps total ≈ max(HSN, MyProtein) au lieu de la somme. On NE fait jamais
-        # échouer le job ici : le sanity check de chaque script protège déjà ses
-        # propres fichiers, et l'étape commit ne pousse que ce qui a changé — un
-        # site KO n'empêche pas l'autre d'être committé.
+        id: track
+        if: github.event_name != 'push'
+        # Les deux scripts écrivent des fichiers disjoints (data/ et logs séparés)
+        # → aucune contention. On n'arrête PAS le job si un site échoue : l'autre
+        # doit quand même être committé et le site publié. Les codes de sortie
+        # sont remontés à la dernière étape, qui fait échouer le run (→ email).
         run: |
+          set +e
           python hsn_tracker.py & PID_HSN=$!
           python myprotein_tracker.py & PID_MP=$!
-          wait $PID_HSN; echo "HSN exit=$?"
-          wait $PID_MP;  echo "MyProtein exit=$?"
+          wait $PID_HSN; HSN=$?
+          wait $PID_MP; MP=$?
+          echo "HSN exit=$HSN / MyProtein exit=$MP"
+          echo "hsn=$HSN" >> "$GITHUB_OUTPUT"
+          echo "mp=$MP" >> "$GITHUB_OUTPUT"
 
-      # Les deux trackers tournent en parallèle : le comparatif généré en fin de
-      # myprotein_tracker.py peut donc avoir lu un Excel HSN pas encore écrit.
-      # On le régénère ici, une fois les deux scrapes terminés, pour que l'accueil
-      # reflète bien les deux relevés du jour.
-      - name: Rebuild comparatif (accueil)
-        run: python -c "import hsn_tracker as core, myprotein_tracker as mp; core.generate_comparatif([core.HSN_CFG, mp.MP_CFG])"
+      # Régénère tout docs/ (dashboards, recos, accueil, API) depuis data/, une
+      # fois les deux relevés écrits.
+      - name: Build site
+        run: python build.py
 
       - name: Show errors log (if any)
         if: always()
@@ -75,14 +88,40 @@ jobs:
             fi
           done
 
+      # Seules les données sont versionnées. Les pages sont reconstruites à chaque
+      # run et publiées en artefact Pages (pas de HTML de 2 Mo committé par jour).
       - name: Commit and push prices
+        if: github.event_name != 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add whey_prices.xlsx myprotein_prices.xlsx docs/ 2>/dev/null || true
+          git add data/
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
             git commit -m "Daily price update — $(date -u +%Y-%m-%d)"
             git push
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Health check
+        if: always() && github.event_name != 'push'
+        run: |
+          HEALTH=0
+          python build.py --health || HEALTH=$?
+          if [ "${{ steps.track.outputs.hsn }}" != "0" ] || [ "${{ steps.track.outputs.mp }}" != "0" ]; then
+            echo "::error::Un tracker a échoué (HSN=${{ steps.track.outputs.hsn }}, MyProtein=${{ steps.track.outputs.mp }})"
+            exit 1
+          fi
+          if [ "$HEALTH" != "0" ]; then
+            echo "::error::Relevé du jour anormal (cf. résumé du run)"
+            exit 1
           fi

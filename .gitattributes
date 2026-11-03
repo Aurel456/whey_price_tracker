@@ -1,0 +1,3 @@
+# L'historique est écrit en LF par Python (local et CI). Sans ça, autocrlf=true
+# sous Windows réécrirait tout le fichier en CRLF au checkout.
+*.csv text eol=lf

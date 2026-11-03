@@ -2,15 +2,16 @@
 MyProtein Price Tracker
 =======================
 Variante MyProtein (fr.myprotein.com) du tracker HSN. Réutilise toute la couche
-Excel + dashboard + recommandations + sanity de `hsn_tracker` via un `SiteConfig`
-dédié (MP_CFG) — seuls les chemins de sortie changent. Le scraping, lui, est
-spécifique à MyProtein (plateforme THG/Hut, rien à voir avec le Magento de HSN).
+stockage + dashboard + recommandations + sanity de `hsn_tracker` via un
+`SiteConfig` dédié (MP_CFG) — seuls les chemins de sortie changent. Le scraping,
+lui, est spécifique à MyProtein (plateforme THG/Hut, rien à voir avec le Magento
+de HSN).
 
 Usage: python myprotein_tracker.py
 
 Sorties (fichiers séparés de HSN) :
-    myprotein_prices.xlsx, myprotein_dashboard.html, docs/myprotein-dashboard.html,
-    myprotein-recommandations.html, docs/myprotein.html, myprotein_errors.log
+    data/myprotein_prices.csv, data/myprotein_products.csv,
+    docs/myprotein-dashboard.html, docs/myprotein.html, myprotein_errors.log
 
 Particularités MyProtein (cf. AGENTS.md) :
     - Tailles + prix + stock viennent de la ld+json `ProductGroup.hasVariant[]`
@@ -44,7 +45,7 @@ MP_CFG = SiteConfig(
     name="MyProtein",
     brand="MyProtein",
     site_domain="MyProtein.com",
-    excel_path=_HERE / "myprotein_prices.xlsx",
+    slug="myprotein",
     error_log_path=_HERE / "myprotein_errors.log",
     dashboard_docs="myprotein-dashboard.html",
     reco_docs="myprotein.html",
@@ -511,16 +512,13 @@ async def main():
             sys.exit(1)
 
     if clean_rows:
-        print(f"\nEnregistrement de {len(clean_rows)} lignes dans Excel...")
+        print(f"\nEnregistrement de {len(clean_rows)} lignes...")
         append_rows(clean_rows, MP_CFG)
-        print(f"Excel OK : {MP_CFG.excel_path}")
+        print(f"Historique OK : {MP_CFG.prices_path}")
         print("Génération du dashboard HTML...")
         generate_dashboard(cfg=MP_CFG)
-        # Le comparatif multi-sites est régénéré ici et pas dans hsn_tracker : c'est
-        # le seul module qui connaît les deux SiteConfig (hsn_tracker ne peut pas
-        # importer myprotein_tracker sans cycle). Le workflow lance HSN puis
-        # MyProtein, donc l'accueil reflète bien les deux relevés du jour.
-        core.generate_comparatif([core.HSN_CFG, MP_CFG])
+        # L'accueil multi-sites et l'API sont générés par build.py, seul module
+        # qui connaît tous les SiteConfig.
         print(f"Terminé ! {len(clean_rows)} entrées MyProtein")
     else:
         print("Aucune donnée collectée.")

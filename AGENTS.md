@@ -25,11 +25,15 @@ Pour le workflow GitHub Actions : `--headless=new` ne demande pas de display X (
 
 Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...})`. Ce JSON contient des SVG inline (icônes formats `Monodose`, `Pack`, etc.) avec des `{` dans les `viewBox` / paths. **Compter naïvement les `{`/`}` casse** — utiliser `json.JSONDecoder().raw_decode(source, idx)` qui suit la syntaxe JSON (strings + escapes). Bug observé 2026-05 quand HSN a ajouté les SVG icônes.
 
-## Structure Excel & migrations
+## Stockage CSV & migrations (depuis 2026-11, plus d'Excel)
 
-- Les en-têtes Excel sont la source de vérité. `load_or_create_workbook()` ajoute automatiquement les colonnes manquantes en queue : pas besoin de migration manuelle quand on étend `HEADERS`.
-- L'ordre de `HEADERS`, `COL_WIDTHS` et la liste `data` dans `append_rows` doivent rester en miroir. Quand tu ajoutes une colonne, vérifie les **trois** endroits.
-- Lecture en `read_only=True` peut renvoyer des en-têtes avec mojibake (`Co�t/portion`) sur Windows. Le contenu fichier est OK ; n'essaie pas de "réparer" l'encodage à l'écriture.
+- **Source de vérité = `data/<slug>_prices.csv`** (une ligne par jour × produit × taille, colonnes `PRICE_COLS`) **+ `data/<slug>_products.csv`** (une ligne par URL : `PRODUCT_COLS` = ingrédients, profil AA, description, mots-clés). `load_rows(cfg)` les rejoint et renvoie des dicts keyés par `HEADERS`, exactement la forme que renvoyait l'ancienne lecture Excel. Les fonctions en aval n'ont pas changé.
+- **Pourquoi pas Excel** : un `.xlsx` est un zip, donc git stockait le fichier entier à chaque commit quotidien. Avec en plus les pages HTML de 2 Mo, le dépôt gagnait ~1 Mo par jour (192 Mo en 6 mois). **Pourquoi deux fichiers** : avec les ingrédients recopiés chaque jour, le CSV HSN faisait 12 Mo après 6 mois, contre 3,6 Mo une fois séparé. Ne pas remettre de colonnes lourdes et constantes dans `PRICE_COLS`.
+- `save_products` : une valeur vide **n'écrase jamais** une valeur connue. Avant, une ligne du jour sans ingrédients (échec ponctuel du parsing) faisait afficher « sans édulcorant » sur un produit au sucralose (Impact Plant Protein, constaté à la migration).
+- Les types sont reconstruits par `_cast_cell` (vide → `None`, entier → `int`, décimal → `float`, `En stock` → `bool`), à l'identique d'openpyxl. La migration a été vérifiée **sans aucun écart** sur 21 859 lignes.
+- Ajouter une colonne : l'ordre de `HEADERS`, `COL_WIDTHS` et la liste `data` dans `_row_record` doivent rester en miroir. Vérifie les **trois** endroits. `_migrate_header` réécrit le CSV avec le nouvel en-tête au prochain `append_rows` (anciennes lignes = colonne vide), aucune migration manuelle n'est nécessaire.
+- `.gitattributes` force les CSV en LF (le poste Windows a `core.autocrlf=true`).
+- Pour regarder l'historique dans Excel : `python build.py --excel` → `exports/` (non versionné).
 
 ## Scraping HSN — patterns observés
 
@@ -51,7 +55,7 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 
 - `print()` depuis 4 workers async qui scrapent en parallèle entrelace les lignes dans la console. Une ligne sous un en-tête `[33/38] product-X` peut venir de `[34/38]`.
 - **Tous les prints de variants doivent inclure un préfixe URL/idx** pour rester lisibles. Cf. le format `[short:28s]` utilisé dans `scrape_product`.
-- Quand un user montre un log "bizarre", **vérifier d'abord l'Excel ou la donnée structurée**, pas l'output stdout. L'output peut être interleavé.
+- Quand un user montre un log "bizarre", **vérifier d'abord `data/*.csv` (la donnée structurée)**, pas l'output stdout. L'output peut être interleavé.
 
 ## Détection automatique de tags
 
@@ -82,11 +86,13 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 
 ## Workflow de modif
 
-1. Si tu touches au schéma Excel → vérifie `HEADERS`, `COL_WIDTHS`, `append_rows` (3 endroits).
+1. Si tu touches au schéma des données → vérifie `HEADERS`, `COL_WIDTHS`, `_row_record` (3 endroits).
 2. Si tu touches au dashboard → regen via `from hsn_tracker import generate_dashboard; generate_dashboard()` à chaque itération. Pas besoin de rescrap.
 3. Si tu touches au scraping → test ciblé sur 1-2 URLs avant de lancer le full scrape (cf. les helpers ponctuels supprimés `_test_new_urls.py`).
-4. **Toujours regen le dashboard** après modif data ou JS, sinon le HTML qui est versionné reflète l'ancien état. `generate_dashboard(cfg)` écrit `docs/<dashboard_docs>` puis appelle `generate_recommendations()` qui écrit `docs/<reco_docs>`. L'accueil (`docs/index.html`) vient de `generate_comparatif()`, à relancer à part. Le workflow committe tout `docs/`.
+4. **Pour vérifier un changement de rendu : `python build.py`** (toutes les pages + l'API, depuis `data/`, sans scraper). `docs/` n'est **plus versionné** : la CI le reconstruit et le publie en artefact Pages à chaque run. Il n'y a donc rien à committer côté HTML.
    - **Landing page** : cf. la section « Page d'accueil = comparatif multi-sites » plus bas pour la liste exacte des fichiers générés.
+   - **Non-régression de rendu** : avant un refactor, copie `docs/` ailleurs, puis compare `RAW`/`HISTORY` des dashboards et le texte visible des autres pages. C'est comme ça qu'a été validée la migration CSV.
+   - **`python -m pytest`** avant de proposer un commit. Chaque piège documenté ici devrait avoir son test (`tests/`).
 5. **À la fin de chaque phase d'implémentation, proposer un `git commit -m "..."` rapide** avec un message court qui résume les changements. Ne pas commit soi-même sans validation — juste afficher la commande au user pour qu'il valide / ajuste.
 
 ## Page recommandations (recommandeur interactif)
@@ -110,7 +116,7 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 - Le check (`_STOCK_CHECK_JS`) est **par variante** : il s'exécute après le click legacy ou le `select_option` qui sélectionne la variante. Sinon on lit l'état de la variante par défaut pour toutes les tailles.
 - Pour la méthode SELECT (HSN ~2025+), il faut programmatiquement `page.select_option(...)` avant le check stock, sinon le DOM reste figé sur la variante par défaut. Coût ≈ CLICK_WAIT × N variantes (acceptable).
 - Le `<select id=selectProductSimple>` capture aussi des options de cross-sell (sur evoexcel : 152 options vs ~6 pour le produit). La dédup par taille dans `scrape_product` masque le problème en pratique, mais `select_option` peut cibler le mauvais select sur ce genre de page — à surveiller.
-- La colonne `En stock` dans Excel vaut `True` par défaut (conservateur : mieux manquer une rupture que de faux-positifs).
+- La colonne `En stock` vaut `True` par défaut (conservateur : mieux manquer une rupture que de faux-positifs).
 - Les tailles `Pack` / `Monodose` sont déjà exclues via `SIZE_EXCLUDE_RE` avant la boucle — leur état stock n'a pas à être vérifié.
 
 ## Graphique de tendance multi-produits
@@ -131,7 +137,7 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 
 ## Multi-sites (HSN + MyProtein)
 
-- Architecture : `hsn_tracker.py` contient toute la couche **partagée** (Excel,
+- Architecture : `hsn_tracker.py` contient toute la couche **partagée** (stockage,
   dashboard, recommandations, sanity). Elle est paramétrée par un `SiteConfig`
   (dataclass en haut du fichier) passé en argument optionnel `cfg=HSN_CFG`. Les
   défauts reproduisent **exactement** le comportement HSN historique — ne pas
@@ -141,10 +147,14 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
   `append_rows/generate_dashboard/sanity_check_rows(..., cfg=MP_CFG)`.
 - Quand tu touches à une fonction liée aux chemins (`append_rows`,
   `generate_dashboard`, `generate_recommendations`, `sanity_check_rows`,
-  `_last_date_product_count`, `log_error`, `load_or_create_workbook`), garde le
-  paramètre `cfg` et n'utilise plus `EXCEL_PATH`/`ERROR_LOG_PATH` en dur dedans.
+  `_last_date_product_count`, `log_error`, `load_rows`), garde le
+  paramètre `cfg` et n'utilise pas `ERROR_LOG_PATH` en dur dedans. Les chemins
+  de données viennent de `cfg.prices_path` / `cfg.products_path` (dérivés de
+  `cfg.slug`), ceux du site de `DOCS_DIR`.
+- Ajouter un site = un `SiteConfig` (slug unique) + son module de scraping +
+  l'ajouter à `SITES` dans `build.py` et au workflow.
 - **Fichiers séparés** par site (choix utilisateur) : pas de colonne « Site », pas
-  de schéma Excel modifié. `myprotein.html` (docs/) est la landing Pages MyProtein,
+  de schéma de données modifié. `myprotein.html` (docs/) est la landing Pages MyProtein,
   **distincte** de `index.html` (= HSN).
 
 ### Scraping MyProtein (plateforme THG/Hut)
@@ -216,10 +226,9 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
   champs `*_local` de `SiteConfig` et les tokens `__DASHBOARD_HREF__` par
   destination ont disparu avec eux. **Ne pas les réintroduire.**
 - `generate_comparatif(sites)` prend une **liste de SiteConfig** et relit chaque
-  Excel via `_site_snapshot`. Elle est appelée depuis **`myprotein_tracker.py`**
-  (fin de `main`) et pas depuis `hsn_tracker.py` : c'est le seul module qui
-  connaît les deux configs sans créer d'import circulaire. Conséquence : lancer
-  `hsn_tracker.py` seul ne régénère PAS l'accueil.
+  historique via `_site_snapshot`. Elle est appelée depuis **`build.py`**, seul
+  module qui connaît tous les sites sans import circulaire (`SITES`). Un
+  tracker lancé seul ne régénère PAS l'accueil : relancer `python build.py`.
 - **Seuil d'égalité (`TIE_PCT`, 3 %)** : sous cet écart, aucune catégorie n'a de
   gagnant (badge « ≈ Prix équivalent »). Sans ça, un écart de **1 centime** sur la
   créatine (25,49 € vs 25,50 €) suffisait à faire écrire « aucun site n'est le
@@ -244,7 +253,7 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
 ## Statut actif / inactif (distinct de la rupture de stock)
 
 - Trois états distincts, à ne pas confondre :
-  - **En stock / rupture** (colonne Excel `En stock`) : le produit est au
+  - **En stock / rupture** (colonne `En stock`) : le produit est au
     catalogue mais indisponible. Il est toujours scrapé chaque jour → **actif**.
   - **Inactif** : plus vu au scrape depuis > `STALE_SIZE_DAYS` (3) jours. Retiré
     du catalogue, ou taille/nom qui a changé. Gardé et affiché grisé (badge
@@ -292,9 +301,54 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
   jour"). Bug réel trouvé 2026-07 : la page MyProtein affichait "Guide
   indépendant · HSNstore.fr" et "les whey... de HSN au vrai coût" mot pour mot.
 
+## API JSON & extension navigateur
+
+- `generate_api(sites)` (appelée par `build.py`) écrit `docs/api/v1/prices.json` :
+  produits actifs groupés par URL, et pour chaque taille le prix, la métrique de
+  coût réel, `min30`/`min90`/`max90`/`minAll`, un historique en escalier
+  (`API_PRICE_DAYS` jours, un point par changement de prix), puis `rank`/`of`
+  et `best` par famille.
+- **Famille = `_api_family`** : type, et pour la whey la gamme `_whey_tier`
+  (même règle que le flag `mixed` du comparatif). La première version classait
+  toutes les whey ensemble. Sur la fiche Evolate CFM, l'extension proposait
+  alors un isolat de soja « 75 % moins cher ». Ne jamais comparer hors famille.
+- **Contrat versionné** : les extensions installées lisent `v1/`. Ajouter un champ
+  est sans risque. Renommer ou supprimer un champ impose un `v2/` publié en
+  parallèle.
+- **Clé de jointure** : `_url_key()` en Python == `urlKey()` dans
+  `extension/background.js` (sans schéma, `www.`, query, fragment ni `/` final).
+  Les deux doivent rester identiques.
+- L'extension (`extension/`, Manifest V3, Chrome + Firefox) : `background.js`
+  télécharge l'API (cache 1 h, repli sur le cache hors ligne), `content.js` rend
+  l'encart dans un **Shadow DOM** sur hsnstore.fr et fr.myprotein.com.
+  Pièges vus en test :
+  - une table dans un shadow root n'hérite ni de la police ni de la couleur
+    quand la page hôte est en mode quirks → `table { font: inherit; color: inherit }` ;
+  - une sparkline de prix est illisible sur HSN, qui alterne promo et prix
+    normal tous les 2-3 jours (effet code-barres). D'où la jauge min ↔ max sur 90 jours.
+- Tester l'encart sans navigateur connecté : script Playwright qui intercepte
+  (`page.route`) les URL HSN/MyProtein avec une fausse fiche, sert l'API locale
+  et simule `chrome.*` (storage + runtime.sendMessage → listener du background).
+
+## Santé du relevé & CI
+
+- Le workflow ne s'arrête plus au premier tracker en échec (`set +e`) : les codes
+  de sortie sont remontés, les données de l'autre site sont committées et le site
+  est publié, puis la **dernière étape fait échouer le run**. GitHub envoie alors
+  un email. Avant, un échec passait inaperçu.
+- `health_report` (`python build.py --health`) : échec si un site n'a aucune
+  ligne datée d'aujourd'hui ou moins de `HEALTH_MIN_RATIO` (75 %) de sa médiane
+  sur `HEALTH_LOOKBACK` (7) jours. Distinct du `sanity_check_rows`, qui
+  *empêche d'écrire* un relevé effondré (< 50 %) : le health check, lui, *prévient*.
+- `docs/` est publié via `actions/upload-pages-artifact` + `actions/deploy-pages`.
+  Il faut **Settings → Pages → Source = GitHub Actions** (sinon Pages sert la
+  branche, où `docs/` n'existe plus).
+- Un push qui touche le code de génération déclenche un rebuild + déploiement
+  sans scraping (`if: github.event_name != 'push'` sur les étapes de scrape).
+
 ## Ne pas faire
 
 - Ne pas filtrer silencieusement des rows dans `generate_dashboard` sans un commentaire expliquant pourquoi (cf. l'incident px_kg/oméga).
 - Ne pas hardcoder de colonnes "whey" dans le rendu du tableau — passer par `TAB_COLS`.
-- Ne pas appeler des modules externes pour des transformations triviales sur Excel (openpyxl suffit, pas besoin de pandas).
-- Ne pas écrire de fichier JSON / Markdown auxiliaire sans demande explicite — `tags.json` et `descriptions.json` sont les seuls JSON métier autorisés.
+- Ne pas appeler des modules externes pour des transformations triviales sur les CSV (le module `csv` suffit, pas besoin de pandas).
+- Ne pas écrire de fichier JSON / Markdown auxiliaire sans demande explicite — `tags.json` et `descriptions.json` sont les seuls JSON métier autorisés (`docs/api/v1/prices.json` est un artefact généré, pas une source).

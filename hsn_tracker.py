@@ -1,40 +1,42 @@
 """
 HSN Whey Price Tracker
 ======================
-Lance ce script pour mettre à jour les prix du jour dans whey_prices.xlsx
-et régénérer le dashboard HTML whey_dashboard.html.
+Lance ce script pour ajouter les prix du jour dans data/hsn_prices.csv et
+régénérer le dashboard + la page reco HSN dans docs/.
 
-Usage: python hsn_tracker.py
+Usage: python hsn_tracker.py      (scrape HSN)
+       python build.py            (régénère toutes les pages depuis data/)
 
-Dépendances: pip install playwright openpyxl
+Dépendances: pip install -r requirements.txt
              python -m playwright install chromium
 """
 
 import asyncio
+import csv
 import json
 import os
 import random
 import re
 import sys
+from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from playwright_stealth import Stealth
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-EXCEL_PATH       = Path(__file__).parent / "whey_prices.xlsx"
+ROOT_DIR         = Path(__file__).parent
+DATA_DIR         = ROOT_DIR / "data"
+DOCS_DIR         = ROOT_DIR / "docs"
 DESCRIPTIONS_PATH = Path(__file__).parent / "descriptions.json"
 TAGS_PATH        = Path(__file__).parent / "tags.json"
 ERROR_LOG_PATH   = Path(__file__).parent / "errors.log"
 
 
 # ── Config multi-sites ────────────────────────────────────────────────────────
-# Toute la couche Excel + dashboard + recommandations + sanity est partagée entre
+# Toute la couche stockage + dashboard + recommandations + sanity est partagée entre
 # les sites scrapés (HSN, MyProtein, …). Le seul paramètre qui change est l'ensemble
 # des chemins/noms de fichiers en sortie + l'étiquette de marque. On les regroupe
 # dans un SiteConfig passé en paramètre optionnel (défaut = HSN → comportement
@@ -45,7 +47,7 @@ class SiteConfig:
     name: str               # identifiant interne ("HSN", "MyProtein")
     brand: str              # libellé affiché dans les titres/H1 du dashboard
     site_domain: str        # domaine affiché sur la page reco ("hsnstore.fr")
-    excel_path: Path        # fichier historique des prix
+    slug: str               # préfixe des fichiers data/ ("hsn" → data/hsn_prices.csv)
     error_log_path: Path    # journal d'erreurs
     # Toutes les pages générées vivent dans docs/ (servi par GitHub Pages, et
     # ouvrable en local tel quel : les liens entre pages sont relatifs).
@@ -56,12 +58,22 @@ class SiteConfig:
     other_brand: str = ""
     other_dashboard_docs: str = ""
 
+    @property
+    def prices_path(self) -> Path:
+        """Historique des prix : une ligne par (jour, produit, taille)."""
+        return DATA_DIR / f"{self.slug}_prices.csv"
+
+    @property
+    def products_path(self) -> Path:
+        """Fiches produit (ingrédients, profil AA…) : une ligne par URL."""
+        return DATA_DIR / f"{self.slug}_products.csv"
+
 
 HSN_CFG = SiteConfig(
     name="HSN",
     brand="HSN",
     site_domain="HSNstore.fr",
-    excel_path=EXCEL_PATH,
+    slug="hsn",
     error_log_path=ERROR_LOG_PATH,
     dashboard_docs="dashboard.html",
     # L'accueil (index.html) est le comparatif multi-sites, la page reco HSN est
@@ -70,6 +82,26 @@ HSN_CFG = SiteConfig(
     other_brand="MyProtein",
     other_dashboard_docs="myprotein-dashboard.html",
 )
+
+# URL publique du site (GitHub Pages) — pour les aperçus de lien (Open Graph).
+PAGES_URL = "https://aurel456.github.io/whey_price_tracker/"
+
+
+def _share_meta(title: str, description: str, page: str) -> str:
+    """Balises description + Open Graph : sans elles, un lien collé dans
+    WhatsApp/Discord/Reddit s'affiche sans titre ni résumé."""
+    t, d = _esc(title), _esc(description)
+    url = PAGES_URL + ("" if page == "index.html" else page)
+    return (
+        f"<meta name='description' content='{d}'>\n"
+        "<meta property='og:type' content='website'>\n"
+        "<meta property='og:locale' content='fr_FR'>\n"
+        f"<meta property='og:title' content='{t}'>\n"
+        f"<meta property='og:description' content='{d}'>\n"
+        f"<meta property='og:url' content='{url}'>\n"
+        "<meta name='twitter:card' content='summary'>\n"
+    )
+
 
 # Sanity checks : bornes large pour détecter UNIQUEMENT les erreurs de parsing
 # (cellule vide → 0, mauvaise unité × 1000, valeurs négatives, etc.).
@@ -143,17 +175,7 @@ def log_error(url: str, reason: str, cfg: "SiteConfig" = None) -> None:
         f.write(f"[{ts}] {url}\n   {reason}\n")
 
 
-# ── Excel styles ──────────────────────────────────────────────────────────────
-HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
-HEADER_FONT = Font(bold=True, color="FFFFFF", name="Arial", size=10)
-DATE_FILL   = PatternFill("solid", fgColor="D9E1F2")
-ALT_FILL    = PatternFill("solid", fgColor="F2F2F2")
-CENT_ALIGN  = Alignment(horizontal="center", vertical="center")
-LEFT_ALIGN  = Alignment(horizontal="left",   vertical="center", wrap_text=True)
-THIN_BORDER = Border(
-    left=Side(style="thin"), right=Side(style="thin"),
-    top=Side(style="thin"),  bottom=Side(style="thin"),
-)
+# ── Schéma des données ────────────────────────────────────────────────────────
 HEADERS    = [
     "Date", "Produit", "URL", "Taille", "Prix (€)",
     "Portions", "Coût/portion (€)", "Prix/kg (€)", "DDM",
@@ -183,41 +205,48 @@ COL_WIDTHS = [12, 45, 50, 12, 12, 10, 18, 15, 12, 60, 50,
               10]
 
 
-# ── Excel helpers ─────────────────────────────────────────────────────────────
-def _style(cell, fill=None, font=None, alignment=None, border=THIN_BORDER):
-    if fill:      cell.fill = fill
-    if font:      cell.font = font
-    if alignment: cell.alignment = alignment
-    if border:    cell.border = border
+# Colonnes lourdes et quasi constantes pour une URL donnée : elles vivent dans
+# data/<slug>_products.csv (une ligne par URL, réécrit à chaque run) au lieu
+# d'être recopiées chaque jour dans l'historique. Sans ça le CSV HSN pesait 12 Mo
+# après 6 mois (dont 70 % d'ingrédients répétés), contre 3,6 Mo une fois séparé.
+PRODUCT_COLS = ["Description courte", "Mots-clés", "Ingrédients", "Profil AA (JSON)"]
+PRICE_COLS = [h for h in HEADERS if h not in PRODUCT_COLS]
+NUMERIC_COLS = {
+    h for h in HEADERS
+    if h == "Portions" or any(u in h for u in ("(€)", "(g/", "(mg/", "(kcal/"))
+}
+BOOL_COLS = {"En stock"}
 
 
-def init_workbook(cfg: "SiteConfig" = HSN_CFG):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Historique"
-    ws.freeze_panes = "A2"
-    ws.row_dimensions[1].height = 22
-    for col, (h, w) in enumerate(zip(HEADERS, COL_WIDTHS), start=1):
-        c = ws.cell(row=1, column=col, value=h)
-        _style(c, fill=HEADER_FILL, font=HEADER_FONT, alignment=CENT_ALIGN)
-        ws.column_dimensions[get_column_letter(col)].width = w
-    wb.save(cfg.excel_path)
-    return wb
+# ── Stockage CSV ──────────────────────────────────────────────────────────────
+# CSV texte plutôt qu'Excel : un .xlsx est un zip, git doit stocker le fichier
+# entier à chaque commit quotidien (le dépôt grossissait d'~1 Mo/jour). Un CSV
+# auquel on ajoute des lignes se compresse en delta quasi gratuit, se lit dans
+# n'importe quel outil et se diffe. `export_excel()` reste dispo pour consulter
+# l'historique dans Excel.
+def _fmt_cell(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, bool):
+        return "True" if val else "False"
+    if isinstance(val, float) and val.is_integer():
+        return str(int(val))
+    return str(val)
 
 
-def load_or_create_workbook(cfg: "SiteConfig" = HSN_CFG):
-    if not cfg.excel_path.exists():
-        return init_workbook(cfg)
-    wb = load_workbook(cfg.excel_path)
-    ws = wb["Historique"]
-    existing = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-    if len(existing) < len(HEADERS):
-        for col, h in enumerate(HEADERS[len(existing):], start=len(existing) + 1):
-            c = ws.cell(row=1, column=col, value=h)
-            _style(c, fill=HEADER_FILL, font=HEADER_FONT, alignment=CENT_ALIGN)
-            ws.column_dimensions[get_column_letter(col)].width = COL_WIDTHS[col - 1]
-        wb.save(cfg.excel_path)
-    return wb
+def _cast_cell(col: str, raw: str):
+    """Inverse de `_fmt_cell` : reproduit les types que renvoyait openpyxl
+    (None si vide, int si entier, float sinon, bool pour `En stock`)."""
+    if raw is None or raw == "":
+        return None
+    if col in BOOL_COLS:
+        return raw == "True"
+    if col in NUMERIC_COLS:
+        try:
+            return float(raw) if any(c in raw for c in ".eE") else int(raw)
+        except ValueError:
+            return None
+    return raw
 
 
 def _clean(val):
@@ -236,57 +265,155 @@ def _to_float(val):
         return None
 
 
+def _row_record(r: dict, today: str) -> dict:
+    """Ligne scrapée (clés internes) → dict keyé par les en-têtes HEADERS.
+    L'ordre de `data` doit rester le miroir de HEADERS / COL_WIDTHS."""
+    aa = r.get("amino_acids") or {}
+    data = [
+        today, r.get("name", ""), r.get("url", ""), r.get("size", ""),
+        _to_float(r.get("price")),
+        _to_float(r.get("portions")) if r.get("portions") else None,
+        _to_float(r.get("cout_portion")),
+        _to_float(r.get("px_kg")),
+        r.get("ddm", ""),
+        r.get("desc_short", ""),
+        r.get("keywords", ""),
+        # Coût protéine + nutrition
+        r.get("px_kg_proteine"),
+        r.get("cout_30g_proteine"),
+        r.get("proteines_100g"),
+        r.get("energie_kcal_100g"),
+        r.get("glucides_100g"),
+        r.get("lipides_100g"),
+        r.get("sel_100g"),
+        aa.get("L-Leucine") or aa.get("Leucine"),
+        aa.get("L-Isoleucine") or aa.get("Isoleucine"),
+        aa.get("L-Valine") or aa.get("Valine"),
+        r.get("ingredients", ""),
+        json.dumps(aa, ensure_ascii=False) if aa else "",
+        r.get("cout_3g_leucine"),
+        r.get("categorie", ""),
+        r.get("type_produit", "whey"),
+        r.get("epa_mg_dose"),
+        r.get("dha_mg_dose"),
+        r.get("cout_g_epa_dha"),
+        r.get("creatine_g_dose"),
+        r.get("cout_kg_creatine"),
+        r.get("en_stock", True),
+    ]
+    return dict(zip(HEADERS, data))
+
+
+def _read_csv(path: Path) -> list:
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def _load_products(cfg: "SiteConfig") -> dict:
+    """{url: {col: valeur}} pour les colonnes PRODUCT_COLS."""
+    return {
+        rec["URL"]: {c: _cast_cell(c, rec.get(c, "")) for c in PRODUCT_COLS}
+        for rec in _read_csv(cfg.products_path)
+    }
+
+
+def load_rows(cfg: "SiteConfig" = HSN_CFG) -> list:
+    """Tout l'historique d'un site, une dict par ligne keyée par HEADERS — même
+    forme que l'ancienne lecture Excel. Les colonnes produit sont rejointes
+    depuis le fichier produits par URL."""
+    products = _load_products(cfg)
+    rows = []
+    for rec in _read_csv(cfg.prices_path):
+        row = {h: _cast_cell(h, rec.get(h, "")) for h in PRICE_COLS}
+        row.update(products.get(row.get("URL") or "", dict.fromkeys(PRODUCT_COLS)))
+        rows.append({h: row[h] for h in HEADERS})
+    return rows
+
+
 def append_rows(rows: list, cfg: "SiteConfig" = HSN_CFG):
-    wb = load_or_create_workbook(cfg)
-    ws = wb["Historique"]
+    """Ajoute les lignes du jour à l'historique + met à jour les fiches produit."""
+    DATA_DIR.mkdir(exist_ok=True)
     today = date.today().isoformat()
-    next_row = ws.max_row + 1
-    for i, r in enumerate(rows):
-        aa = r.get("amino_acids") or {}
-        data = [
-            today, r.get("name", ""), r.get("url", ""), r.get("size", ""),
-            _to_float(r.get("price")),
-            _to_float(r.get("portions")) if r.get("portions") else None,
-            _to_float(r.get("cout_portion")),
-            _to_float(r.get("px_kg")),
-            r.get("ddm", ""),
-            r.get("desc_short", ""),
-            r.get("keywords", ""),
-            # Coût protéine + nutrition
-            r.get("px_kg_proteine"),
-            r.get("cout_30g_proteine"),
-            r.get("proteines_100g"),
-            r.get("energie_kcal_100g"),
-            r.get("glucides_100g"),
-            r.get("lipides_100g"),
-            r.get("sel_100g"),
-            aa.get("L-Leucine") or aa.get("Leucine"),
-            aa.get("L-Isoleucine") or aa.get("Isoleucine"),
-            aa.get("L-Valine") or aa.get("Valine"),
-            r.get("ingredients", ""),
-            json.dumps(aa, ensure_ascii=False) if aa else "",
-            r.get("cout_3g_leucine"),
-            r.get("categorie", ""),
-            r.get("type_produit", "whey"),
-            r.get("epa_mg_dose"),
-            r.get("dha_mg_dose"),
-            r.get("cout_g_epa_dha"),
-            r.get("creatine_g_dose"),
-            r.get("cout_kg_creatine"),
-            r.get("en_stock", True),
-        ]
-        row_fill = ALT_FILL if i % 2 == 0 else None
-        for col, val in enumerate(data, start=1):
-            c = ws.cell(row=next_row, column=col, value=val)
-            align = LEFT_ALIGN if col in (2, 3) else CENT_ALIGN
-            _style(c, fill=row_fill, alignment=align)
-            if col == 1:
-                c.fill = DATE_FILL
-                c.font = Font(bold=True, name="Arial", size=9)
-            else:
-                c.font = Font(name="Arial", size=9)
-        next_row += 1
-    wb.save(cfg.excel_path)
+    records = [_row_record(r, today) for r in rows]
+
+    _migrate_header(cfg.prices_path, PRICE_COLS)
+    new_file = not cfg.prices_path.exists()
+    with cfg.prices_path.open("a", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        if new_file:
+            w.writerow(PRICE_COLS)
+        for rec in records:
+            w.writerow([_fmt_cell(rec.get(h)) for h in PRICE_COLS])
+
+    save_products(records, cfg)
+
+
+def _migrate_header(path: Path, cols: list) -> None:
+    """Si HEADERS a changé (colonne ajoutée/renommée), réécrit le CSV avec le
+    nouvel en-tête — les anciennes lignes ont la nouvelle colonne vide. Sans ça,
+    les lignes ajoutées seraient décalées par rapport à l'en-tête existant."""
+    if not path.exists():
+        return
+    with path.open(encoding="utf-8", newline="") as f:
+        header = next(csv.reader(f), None)
+    if header == cols:
+        return
+    old = _read_csv(path)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(cols)
+        for rec in old:
+            w.writerow([rec.get(c, "") for c in cols])
+
+
+def save_products(records: list, cfg: "SiteConfig"):
+    """Upsert des fiches produit par URL. Une valeur vide ne remplace jamais une
+    valeur connue : un échec ponctuel de parsing des ingrédients ne doit pas
+    effacer la fiche."""
+    cols = ["URL"] + PRODUCT_COLS
+    products = {rec["URL"]: rec for rec in _read_csv(cfg.products_path)}
+    for rec in records:
+        url = rec.get("URL") or ""
+        if not url:
+            continue
+        cur = products.setdefault(url, {c: "" for c in cols} | {"URL": url})
+        for c in PRODUCT_COLS:
+            val = _fmt_cell(rec.get(c))
+            if val:
+                cur[c] = val
+    DATA_DIR.mkdir(exist_ok=True)
+    with cfg.products_path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(cols)
+        for url in sorted(products):
+            w.writerow([products[url].get(c, "") for c in cols])
+
+
+def export_excel(cfg: "SiteConfig" = HSN_CFG, path: Path = None) -> Path:
+    """Exporte l'historique complet en .xlsx pour le consulter dans Excel
+    (fichier non versionné, dans exports/). Usage : python build.py --excel"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    path = path or (ROOT_DIR / "exports" / f"{cfg.slug}_prices.xlsx")
+    path.parent.mkdir(exist_ok=True)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Historique"
+    ws.freeze_panes = "A2"
+    ws.append(HEADERS)
+    for col, width in enumerate(COL_WIDTHS, start=1):
+        cell = ws.cell(row=1, column=col)
+        cell.fill = PatternFill("solid", fgColor="1F4E79")
+        cell.font = Font(bold=True, color="FFFFFF")
+        ws.column_dimensions[get_column_letter(col)].width = width
+    for r in load_rows(cfg):
+        ws.append([r[h] for h in HEADERS])
+    wb.save(path)
+    return path
 
 
 # ── Scraping helpers ──────────────────────────────────────────────────────────
@@ -1078,16 +1205,9 @@ def _activity_status(latest: dict) -> dict:
 
 
 def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
-    """Regenerate whey_dashboard.html from current Excel data (or provided rows)."""
+    """Régénère docs/<cfg.dashboard_docs> depuis data/ (ou les rows fournies)."""
     if rows is None:
-        wb = load_or_create_workbook(cfg)
-        ws = wb["Historique"]
-        hdrs = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        rows = [
-            dict(zip(hdrs, r))
-            for r in ws.iter_rows(min_row=2, values_only=True)
-            if any(v is not None for v in r)
-        ]
+        rows = load_rows(cfg)
 
     # Construit l'historique complet par (produit, taille) pour les tendances
     from collections import defaultdict
@@ -1138,7 +1258,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         key = (produit, taille)
         meta = deal_meta.get(key, {})
         ingr = r.get("Ingrédients") or ""
-        # type_produit : si la colonne Excel n'existe pas (ancien historique), retomber sur l'URL
+        # type_produit : si la colonne est vide (ancien historique), retomber sur l'URL
         ptype = str(r.get("Type produit") or _detect_product_type(url))
         if ptype == "whey":
             sweeteners = _detect_sweeteners(ingr, produit)
@@ -1233,7 +1353,12 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "<head>\n"
         "<meta charset='UTF-8'>\n"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n"
-        f"<title>{cfg.brand} Whey Tracker — {today_str}</title>\n"
+        f"<title>Suivi des prix {cfg.brand} — whey, créatine, oméga-3</title>\n"
+        + _share_meta(
+            f"Suivi des prix {cfg.brand} — whey, créatine, oméga-3",
+            f"Historique quotidien des prix {cfg.brand} et coût réel : €/kg de protéine, "
+            "€/g d'EPA+DHA, €/kg de créatine. Filtres, tendances, bons plans.",
+            cfg.dashboard_docs) +
         "<script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js'></script>\n"
         "<style>\n"
         "*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }\n"
@@ -1369,6 +1494,23 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         ".modal .actions .danger { color: #B23B3B; border-color: #E5BABA; }\n"
         ".modal .actions button { font-size: 12px; padding: 6px 14px; border-radius: 6px;"
         " border: 1px solid #ccc; background: #fff; cursor: pointer; }\n"
+        # ── Mobile : le tableau défile horizontalement au lieu d'écraser ses
+        # colonnes, les onglets défilent, les cartes passent sur 2 colonnes.
+        ".table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }\n"
+        "@media (max-width: 700px) {\n"
+        "  body { padding: 12px; }\n"
+        "  h1 { font-size: 17px; }\n"
+        "  .chart-wrap { padding: 12px; }\n"
+        "  .type-tabs { overflow-x: auto; }\n"
+        "  .type-tabs button { padding: 10px 12px; white-space: nowrap; }\n"
+        "  .card { min-width: calc(50% - 6px); padding: 12px 14px; }\n"
+        "  .card-value { font-size: 18px; }\n"
+        "  .filter-row .flbl { min-width: 100%; }\n"
+        "  .table-toolbar { flex-wrap: wrap; }\n"
+        "  .search-input { width: 100%; }\n"
+        "  .trend-controls select { max-width: 100%; }\n"
+        "  #detailTable { min-width: 1040px; }\n"
+        "}\n"
         "</style>\n"
         "</head>\n"
         "<body>\n"
@@ -1466,7 +1608,8 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "<input type='checkbox' id='showInactifs'> Afficher les inactifs</label>\n"
         "    <span id='rowCount' style='font-size:11px;color:#888'></span>\n"
         "  </div>\n"
-        "  <table id='detailTable'><thead id='tableHead'></thead><tbody id='tableBody'></tbody></table>\n"
+        "  <div class='table-scroll'><table id='detailTable'><thead id='tableHead'></thead>"
+        "<tbody id='tableBody'></tbody></table></div>\n"
         "</div>\n"
         # ── Modal d'édition tags / note ─────────────────────────────────────
         "<div class='modal-backdrop' id='editModal' onclick='if(event.target.id===\"editModal\")closeEditModal()'>\n"
@@ -1763,7 +1906,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "    const colspan = cols.length;\n"
         "    const tabRows = RAW.filter(r=>(r.type||'whey')===currentTab);\n"
         "    const msg = tabRows.length===0\n"
-        "      ? `Aucune donnée pour <b>${TYPE_TAB_LABEL[currentTab]}</b> dans l'Excel.<br>Lance <code>python hsn_tracker.py</code> pour scraper ${currentTab==='omega3'?'les oméga-3':currentTab==='creatine'?'les créatines':'les whey'}.`\n"
+        "      ? `Aucune donnée pour <b>${TYPE_TAB_LABEL[currentTab]}</b> dans l'historique.<br>Lance <code>python hsn_tracker.py</code> pour scraper ${currentTab==='omega3'?'les oméga-3':currentTab==='creatine'?'les créatines':'les whey'}.`\n"
         "      : `Aucun produit ne correspond aux filtres actuels.`;\n"
         "    document.getElementById('tableBody').innerHTML = `<tr><td colspan='${colspan}' style='padding:30px;text-align:center;color:#888;font-size:13px'>${msg}</td></tr>`;\n"
         "    return;\n"
@@ -2328,7 +2471,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
     # elles sont relatifs, donc ouvrir docs/dashboard.html en local marche aussi —
     # pas besoin d'une copie racine (l'ancien doublon whey_dashboard.html a été
     # supprimé : deux fichiers identiques à régénérer et à committer chaque jour).
-    docs_dir = cfg.excel_path.parent / "docs"
+    docs_dir = DOCS_DIR
     docs_dir.mkdir(exist_ok=True)
     pages_path = docs_dir / cfg.dashboard_docs
     pages_path.write_text(html.replace("__RECO_HREF__", cfg.reco_docs), encoding="utf-8")
@@ -2342,11 +2485,12 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
 # Page HTML autonome et soignée, pensée pour des visiteurs lambda (pas le tableau
 # technique). Elle met en avant les meilleurs rapports qualité-prix par catégorie,
 # les bons plans du moment, et explique comment bien choisir. Générée depuis le
-# même dernier snapshot Excel que le dashboard.
+# même dernier snapshot que le dashboard.
 
 def _esc(s):
     return (str(s if s is not None else "")
-            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+            .replace("'", "&#39;"))  # les attributs générés sont entre apostrophes
 
 
 def _reco_fmt_eur(v, d=2):
@@ -2628,16 +2772,9 @@ footer .disclaimer{max-width:560px;margin:10px auto 0;font-size:12px;opacity:.85
 
 
 def generate_recommendations(rows=None, cfg: "SiteConfig" = HSN_CFG):
-    """Génère recommandations.html (racine + docs/) — page vitrine grand public."""
+    """Génère docs/<cfg.reco_docs> — page vitrine grand public."""
     if rows is None:
-        wb = load_or_create_workbook(cfg)
-        ws = wb["Historique"]
-        hdrs = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        rows = [
-            dict(zip(hdrs, r))
-            for r in ws.iter_rows(min_row=2, values_only=True)
-            if any(v is not None for v in r)
-        ]
+        rows = load_rows(cfg)
 
     items = _recommendation_data(rows)
     dates = sorted({str(r.get("Date", "")) for r in rows if r.get("Date")})
@@ -2805,7 +2942,11 @@ renderCats();renderCrit();renderOut();
         "<!DOCTYPE html>\n<html lang='fr'>\n<head>\n<meta charset='UTF-8'>\n"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n"
         f"<title>Guide nutrition sportive {cfg.brand} — meilleurs rapports qualité-prix ({today_str})</title>\n"
-        f"<meta name='description' content='Les meilleures whey, oméga-3 et créatine de {cfg.brand} au meilleur rapport qualité-prix, mis à jour chaque jour.'>\n"
+        + _share_meta(
+            f"Guide nutrition sportive {cfg.brand} — meilleurs rapports qualité-prix",
+            f"Les meilleures whey, oméga-3 et créatine de {cfg.brand} au meilleur rapport "
+            "qualité-prix, mis à jour chaque jour.",
+            cfg.reco_docs) +
         "<link rel='preconnect' href='https://fonts.googleapis.com'>\n"
         "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>\n"
         "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>\n"
@@ -2859,7 +3000,7 @@ renderCats();renderCrit();renderOut();
         "</body>\n</html>\n"
     )
 
-    docs_dir = cfg.excel_path.parent / "docs"
+    docs_dir = DOCS_DIR
     docs_dir.mkdir(exist_ok=True)
     pages_html = (html.replace("__DASHBOARD_HREF__", cfg.dashboard_docs)
                       .replace("__COMPARATIF_HREF__", COMPARATIF_DOCS)
@@ -2870,7 +3011,7 @@ renderCats();renderCrit();renderOut();
 
 
 # ── Comparatif multi-sites (accueil GitHub Pages) ─────────────────────────────
-# La page reco est mono-site par construction (un SiteConfig = un Excel). Le
+# La page reco est mono-site par construction (un SiteConfig = un historique). Le
 # comparatif est la couche au-dessus : il relit le dernier snapshot de CHAQUE
 # site et les met face à face. C'est lui l'accueil public (docs/index.html) ;
 # les pages reco par site sont un cran plus loin (docs/hsn.html, myprotein.html).
@@ -2930,14 +3071,7 @@ COMPARATIF_CSS = """
 
 def _site_snapshot(cfg: "SiteConfig") -> dict:
     """Dernier état d'un site : items en stock + méta (nb produits, jours suivis)."""
-    wb = load_or_create_workbook(cfg)
-    ws = wb["Historique"]
-    hdrs = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-    rows = [
-        dict(zip(hdrs, r))
-        for r in ws.iter_rows(min_row=2, values_only=True)
-        if any(v is not None for v in r)
-    ]
+    rows = load_rows(cfg)
     items = [it for it in _recommendation_data(rows) if it.get("en_stock") is not False]
     dates = sorted({str(r.get("Date", "")) for r in rows if r.get("Date")})
     return {
@@ -3139,8 +3273,11 @@ def generate_comparatif(sites: list) -> None:
             "<!DOCTYPE html>\n<html lang='fr'>\n<head>\n<meta charset='UTF-8'>\n"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>\n"
             "<title>Comparatif protéines, créatine &amp; oméga-3 — le vrai prix, mis à jour chaque jour</title>\n"
-            "<meta name='description' content='Comparatif indépendant et quotidien du coût réel de la whey, "
-            "de la créatine et des oméga-3 sur les principaux sites de nutrition sportive.'>\n"
+            + _share_meta(
+                "Comparatif protéines, créatine & oméga-3 — le vrai prix, mis à jour chaque jour",
+                "Comparatif indépendant et quotidien du coût réel de la whey, de la créatine et des "
+                "oméga-3 sur les principaux sites de nutrition sportive.",
+                COMPARATIF_DOCS) +
             f"<style>{RECO_CSS}{COMPARATIF_CSS}</style>\n</head>\n<body>\n"
             "<header class='hero'><div class='wrap'>"
             f"<span class='eyebrow'>Comparatif indépendant · {_esc(brands)}</span>"
@@ -3186,11 +3323,173 @@ def generate_comparatif(sites: list) -> None:
             "</body>\n</html>\n"
         )
 
-    docs_dir = sites[0].excel_path.parent / "docs"
+    docs_dir = DOCS_DIR
     docs_dir.mkdir(exist_ok=True)
     out = docs_dir / COMPARATIF_DOCS
     out.write_text(build(), encoding="utf-8")
     print(f"Comparatif : {out}")
+
+
+# ── API JSON (extension navigateur) ──────────────────────────────────────────
+# Un seul fichier statique servi par GitHub Pages : l'extension le lit quand on
+# visite une fiche produit et affiche le coût réel + l'historique du prix. Pas de
+# backend, pas de scraping côté navigateur. Le contrat est versionné (v1/) : ne
+# renommer aucun champ sans créer un v2/, les extensions installées ne se mettent
+# pas à jour en même temps que le site.
+API_DOCS = "api/v1/prices.json"
+API_PRICE_DAYS = 120   # profondeur de l'historique embarqué par taille
+
+
+def _url_key(url: str) -> str:
+    """Clé de jointure URL ↔ page visitée : sans schéma, www, query ni slash final.
+    Miroir exact de `urlKey()` dans extension/background.js."""
+    u = (url or "").strip().lower().split("#")[0].split("?")[0]
+    u = re.sub(r"^https?://", "", u)
+    u = re.sub(r"^www\.", "", u)
+    return u.rstrip("/")
+
+
+def _price_stats(points: list, today: str) -> dict:
+    """Stats de prix d'une taille. `points` = [(date ISO, prix)] triés par date."""
+    def window(days):
+        lim = (date.fromisoformat(today) - timedelta(days=days)).isoformat()
+        return [p for d, p in points if d >= lim]
+
+    last30, last90 = window(30), window(90)
+    low_date, low = min(points, key=lambda dp: (dp[1], dp[0]))
+    # Historique compressé : on ne garde que les jours où le prix change (+ le
+    # dernier point), ça suffit pour tracer une courbe en escalier.
+    lim = (date.fromisoformat(today) - timedelta(days=API_PRICE_DAYS)).isoformat()
+    steps = []
+    for d, p in points:
+        if d >= lim and (not steps or steps[-1][1] != p):
+            steps.append([d, p])
+    if steps and steps[-1][0] != points[-1][0]:
+        steps.append([points[-1][0], points[-1][1]])
+    return {
+        "min30": min(last30, default=None), "min90": min(last90, default=None),
+        "max90": max(last90, default=None),
+        "minAll": low, "minAllDate": low_date, "since": points[0][0],
+        "history": steps,
+    }
+
+
+def _api_family(it: dict):
+    """Groupe de comparaison d'une offre. Pour la whey, la gamme (`_whey_tier`) —
+    même règle que le flag `mixed` du comparatif : classer une whey CFM face à
+    un isolat de soja (structurellement moins cher au kg de protéine) afficherait
+    « 75 % de moins » pour un écart qui n'en est pas un."""
+    if it["type"] == "whey":
+        return f"whey:{it.get('wheyTier') or 'autre'}"
+    return it["type"] if it["type"] in RECO_KIND else None
+
+
+def generate_api(sites: list) -> Path:
+    """Écrit docs/api/v1/prices.json : dernier état de chaque site + stats de prix
+    + rang de chaque offre parmi TOUS les sites, au sein de sa famille (même type
+    et, pour la whey, même gamme)."""
+    today = date.today().isoformat()
+    products, offers = {}, []
+    meta = {}
+    for cfg in sites:
+        rows = load_rows(cfg)
+        meta[cfg.slug] = {
+            "name": cfg.brand, "domain": cfg.site_domain,
+            "dashboard": cfg.dashboard_docs, "reco": cfg.reco_docs,
+            "lastScrape": max((str(r["Date"]) for r in rows if r.get("Date")), default=None),
+        }
+        points = defaultdict(list)
+        for r in rows:
+            if r.get("Prix (€)") is not None and r.get("Date"):
+                points[(str(r.get("Produit", "")), str(r.get("Taille", "")))].append(
+                    (str(r["Date"]), r["Prix (€)"]))
+        for it in _recommendation_data(rows):
+            pts = sorted(points.get((it["produit"], it["taille"]), []))
+            if not pts:
+                continue
+            kind = it["type"] if it["type"] in RECO_KIND else None
+            metric = it.get(RECO_KIND[kind]["metric"]) if kind else None
+            key = _url_key(it["url"])
+            family = _api_family(it)
+            prod = products.setdefault(key, {
+                "key": key, "site": cfg.slug, "url": it["url"], "name": it["produit"],
+                "type": it["type"], "family": family, "categorie": it["categorie"],
+                "tags": sorted(set(it["sweeteners"] + it["wheyTypes"] + it["typeTags"])),
+                "badges": it.get("badges", []), "sizes": [],
+            })
+            offer = {
+                "size": it["taille"], "price": it["prix"], "metric": metric,
+                "inStock": it.get("en_stock") is not False, "date": pts[-1][0],
+                "rank": None, "of": None, **_price_stats(pts, today),
+            }
+            prod["sizes"].append(offer)
+            # Classement : même type, en stock, et pour la whey uniquement la
+            # catégorie Whey (≥70 %) — sinon une crème de riz protéinée se
+            # retrouve classée face aux isolats.
+            if (metric is not None and offer["inStock"]
+                    and (kind != "whey" or it["categorie"] == "Whey")):
+                offers.append((family, metric, offer, prod))
+
+    best = {}
+    for family in sorted({o[0] for o in offers}):
+        pool = sorted((o for o in offers if o[0] == family), key=lambda o: o[1])
+        for i, (_, _, offer, _) in enumerate(pool, 1):
+            offer["rank"], offer["of"] = i, len(pool)
+        best[family] = [
+            {"key": prod["key"], "site": prod["site"], "url": prod["url"], "name": prod["name"],
+             "size": offer["size"], "price": offer["price"], "metric": m}
+            for _, m, offer, prod in pool[:5]
+        ]
+
+    payload = {
+        "version": 1,
+        "generated": today,
+        "sites": meta,
+        "metrics": {k: {"label": v["label"], "unit": v["unit"], "decimals": v["d"]}
+                    for k, v in RECO_KIND.items()},
+        "families": {
+            **{f"whey:{k}": f"protéines de gamme {v}" for k, v in _WHEY_TIER_LABEL.items()},
+            "whey:vegan": "protéines végétales",
+            "omega3": "oméga-3", "creatine": "créatines",
+        },
+        "best": best,
+        "products": sorted(products.values(), key=lambda p: p["key"]),
+    }
+    out = DOCS_DIR / API_DOCS
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print(f"API : {out} ({len(products)} produits)")
+    return out
+
+
+# ── Santé des relevés (CI) ────────────────────────────────────────────────────
+# Le sanity check ci-dessous protège l'historique (il refuse d'écrire un relevé
+# effondré). Celui-ci sert à PRÉVENIR : lancé en fin de workflow, il fait échouer
+# le job — donc envoie un email GitHub — quand un site n'a rien relevé
+# aujourd'hui ou nettement moins de produits que d'habitude. Sans lui, un blocage
+# Cloudflare pouvait passer des semaines inaperçu.
+HEALTH_MIN_RATIO = 0.75   # sous 75 % de la médiane des 7 derniers relevés → alerte
+HEALTH_LOOKBACK = 7
+
+
+def health_report(sites: list, today: str = None) -> tuple:
+    """Renvoie (ok, lignes markdown) pour le relevé du jour de chaque site."""
+    today = today or date.today().isoformat()
+    ok = True
+    lines = ["| Site | Produits aujourd'hui | Médiane 7 j | Statut |", "|---|---|---|---|"]
+    for cfg in sites:
+        counts = _products_per_date(cfg)
+        prev = sorted(d for d in counts if d < today)[-HEALTH_LOOKBACK:]
+        median = sorted(counts[d] for d in prev)[len(prev) // 2] if prev else None
+        n = counts.get(today, 0)
+        if n == 0:
+            status, ok = "❌ aucun relevé aujourd'hui", False
+        elif median and n < median * HEALTH_MIN_RATIO:
+            status, ok = f"❌ chute ({n / median:.0%} de la médiane)", False
+        else:
+            status = "✅"
+        lines.append(f"| {cfg.brand} | {n} | {median if median is not None else '—'} | {status} |")
+    return ok, lines
 
 
 # ── Sanity check pré-commit ───────────────────────────────────────────────────
@@ -3216,33 +3515,22 @@ def _is_blocked_row(row: dict) -> bool:
 
 
 def _last_date_product_count(cfg: "SiteConfig" = HSN_CFG) -> tuple:
-    """Renvoie (date, nb_produits_uniques) de la dernière date dans l'Excel.
-    Renvoie (None, 0) si l'Excel n'existe pas ou est vide."""
-    if not cfg.excel_path.exists():
+    """Renvoie (date, nb_produits_uniques) de la dernière date de l'historique.
+    Renvoie (None, 0) si l'historique n'existe pas ou est vide."""
+    counts = _products_per_date(cfg)
+    if not counts:
         return None, 0
-    try:
-        wb = load_workbook(cfg.excel_path, read_only=True)
-        ws = wb["Historique"]
-        hdrs = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        if "Date" not in hdrs or "Produit" not in hdrs:
-            return None, 0
-        i_date = hdrs.index("Date")
-        i_prod = hdrs.index("Produit")
-        last_date = None
-        by_date = {}
-        for r in ws.iter_rows(min_row=2, values_only=True):
-            if not r or not r[i_date]:
-                continue
-            d = str(r[i_date])
-            if last_date is None or d > last_date:
-                last_date = d
-            by_date.setdefault(d, set()).add(str(r[i_prod] or ""))
-        if last_date is None:
-            return None, 0
-        return last_date, len(by_date.get(last_date, set()))
-    except Exception as e:
-        print(f"  [warn] lecture Excel pour sanity check : {e}")
-        return None, 0
+    last_date = max(counts)
+    return last_date, counts[last_date]
+
+
+def _products_per_date(cfg: "SiteConfig") -> dict:
+    """{date ISO: nb de produits uniques relevés ce jour-là}."""
+    by_date = {}
+    for rec in _read_csv(cfg.prices_path):
+        if rec.get("Date"):
+            by_date.setdefault(rec["Date"], set()).add(rec.get("Produit") or "")
+    return {d: len(v) for d, v in by_date.items()}
 
 
 def sanity_check_rows(rows: list, cfg: "SiteConfig" = HSN_CFG) -> tuple:
@@ -3378,9 +3666,9 @@ async def main():
             sys.exit(1)
 
     if clean_rows:
-        print(f"\nEnregistrement de {len(clean_rows)} lignes dans Excel...")
+        print(f"\nEnregistrement de {len(clean_rows)} lignes...")
         append_rows(clean_rows)
-        print(f"Excel OK : {EXCEL_PATH}")
+        print(f"Historique OK : {HSN_CFG.prices_path}")
         print("Generation du dashboard HTML...")
         generate_dashboard()
         print(f"Termine ! {len(clean_rows)} entrees pour le {date.today().isoformat()}")
