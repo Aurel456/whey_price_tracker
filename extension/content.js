@@ -2,6 +2,7 @@
 // Rendu dans un Shadow DOM : le CSS du site marchand ne peut pas le casser, et
 // le nôtre ne déborde pas sur la page.
 (() => {
+  const ext = globalThis.browser ?? globalThis.chrome; // cf. background.js
   const HOST_ID = 'vrai-prix-ext';
   const VISIBLE_SIZES = 4;
   let lastHref = null;
@@ -148,7 +149,7 @@
     const host = document.createElement('div');
     host.id = HOST_ID;
     const root = host.attachShadow({ mode: 'open' });
-    const { collapsed } = await chrome.storage.local.get('collapsed');
+    const { collapsed } = await ext.storage.local.get('collapsed');
     const metrics = res.product.sizes.filter((s) => s.metric != null).map((s) => s.metric);
     const d = res.metric ? res.metric.decimals : 2;
     const pillText = metrics.length
@@ -163,7 +164,7 @@
       root.querySelector('.close')?.addEventListener('click', () => host.remove());
       root.querySelector('.more')?.addEventListener('click', () => draw(false, true));
     };
-    const toggle = (value) => { chrome.storage.local.set({ collapsed: value }); draw(value); };
+    const toggle = (value) => { ext.storage.local.set({ collapsed: value }); draw(value); };
 
     draw(Boolean(collapsed));
     document.documentElement.appendChild(host);
@@ -172,7 +173,7 @@
   function check() {
     if (location.href === lastHref) return;
     lastHref = location.href;
-    chrome.runtime.sendMessage({ type: 'lookup', url: location.href })
+    ext.runtime.sendMessage({ type: 'lookup', url: location.href })
       .then(render)
       .catch(() => { /* API injoignable : on n'affiche rien plutôt qu'une erreur */ });
   }

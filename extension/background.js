@@ -2,6 +2,8 @@
 // répond aux fiches produit qui demandent « que sait-on de cette URL ? ».
 // Aucune donnée de navigation ne sort du navigateur : on télécharge le fichier
 // entier et la recherche se fait en local.
+// Firefox expose `browser` (promesses garanties) ; Chrome seulement `chrome`.
+const ext = globalThis.browser ?? globalThis.chrome;
 const SITE_URL = 'https://aurel456.github.io/whey_price_tracker/';
 const API_URL = SITE_URL + 'api/v1/prices.json';
 const TTL_MS = 60 * 60 * 1000; // les prix ne bougent qu'une fois par jour
@@ -14,14 +16,14 @@ function urlKey(url) {
 }
 
 async function getData() {
-  const { cache } = await chrome.storage.local.get('cache');
+  const { cache } = await ext.storage.local.get('cache');
   if (cache && Date.now() - cache.at < TTL_MS) return cache.data;
   try {
     const res = await fetch(API_URL, { cache: 'no-cache' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     if (data.version !== 1) throw new Error('Version d\'API inattendue : ' + data.version);
-    await chrome.storage.local.set({ cache: { at: Date.now(), data } });
+    await ext.storage.local.set({ cache: { at: Date.now(), data } });
     return data;
   } catch (err) {
     if (cache) return cache.data; // hors ligne : dernières données connues
@@ -48,10 +50,10 @@ async function lookup(url) {
   };
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || msg.type !== 'lookup') return false;
   lookup(msg.url).then(sendResponse, (err) => sendResponse({ error: String(err) }));
   return true; // réponse asynchrone
 });
 
-chrome.action.onClicked.addListener(() => chrome.tabs.create({ url: SITE_URL }));
+ext.action.onClicked.addListener(() => ext.tabs.create({ url: SITE_URL }));
