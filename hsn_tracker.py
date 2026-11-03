@@ -971,6 +971,21 @@ def _enrich_row(row: dict, nutri: dict, ptype: str = None) -> dict:
     return row
 
 
+# Formulaire d'ajout au panier du produit principal. Les produits associés ont
+# `product_related_addtocart_form_*` : le préfixe exact les exclut.
+_MAIN_FORM_SEL = 'form[id^="product_addtocart_form"]'
+
+# Prix affiché du produit principal pour la variante sélectionnée (texte
+# « 18,45 € »). `#product-price-<id>` est mis à jour en JS au changement de
+# taille. Les `[data-price-type=finalPrice]` de `.product-info-main` sont
+# ceux des produits associés et ne bougent pas — ne pas les utiliser.
+_MAIN_PRICE_JS = r"""() => {
+    const pid = document.querySelector('form[id^="product_addtocart_form"] input[name="product"]')?.value;
+    const el = (pid && document.querySelector('#product-price-' + pid + ' .price'))
+        || document.querySelector('#sticky-add-to-cart .final-price .price');
+    return el ? el.innerText.trim() : '';
+}"""
+
 _STOCK_CHECK_JS = r"""() => {
     // HSN n'utilise pas les sélecteurs Magento standards (.stock.unavailable,
     // #product-addtocart-button) — ils ont leur propre design Tailwind. Les
@@ -1037,24 +1052,35 @@ async def scrape_product(page, url: str) -> list:
         # Nutrition / AA / ingrédients : 1× par produit (identique sur toutes les tailles)
         nutri = await extract_nutrition_data(page)
 
-        # Méthode legacy : inputs super_attribute (radio/checkbox)
-        sizes = await page.evaluate("""() =>
-            Array.from(document.querySelectorAll('input[name*="super_attribute"]')).map(i => ({
+        # Méthode legacy : inputs super_attribute (radio/checkbox), cherchés dans
+        # le SEUL formulaire du produit principal. La page embarque des produits
+        # associés (`product_related_addtocart_form_*`) avec leurs propres
+        # variantes : chercher dans tout le document les mélangeait au produit.
+        sizes = await page.evaluate("""() => {
+            const scope = document.querySelector(%s) || document;
+            return Array.from(scope.querySelectorAll('input[name*="super_attribute"]')).map(i => ({
                 kind: 'input',
                 value: i.value,
                 id: i.id,
-                label: document.querySelector('label[for="' + i.id + '"]')?.innerText?.trim()
-            })).filter(s => s.label)
-        """)
+                label: (document.querySelector('label[for="' + i.id + '"]') || i.closest('label'))
+                    ?.innerText?.trim()
+            })).filter(s => s.label);
+        }""" % json.dumps(_MAIN_FORM_SEL))
 
         # Méthode actuelle (HSN ~2025+) : <select id="selectProductSimple"> avec
-        # options du type "EVOCLEAR HYDRO 1Kg ANANAS" — on groupe par taille
+        # options du type "EVOCLEAR HYDRO 1Kg ANANAS" — on groupe par taille.
+        # Même règle de périmètre : les selects des produits associés listent
+        # d'AUTRES références (« Isolat de soja 2.0 2kg bonbon… » sur la fiche
+        # soja elle-même) — c'est ce qui produisait des tailles « 2kg » sans le
+        # 500g, prix vide, dans l'historique depuis 2026-07-30.
         if not sizes:
-            variants = await page.evaluate(r"""() =>
-                Array.from(document.querySelectorAll('#selectProductSimple option, select.select-product option'))
+            log_error(url, "Aucun input de variante dans le formulaire principal → méthode <select>")
+            variants = await page.evaluate(r"""() => {
+                const scope = document.querySelector(%s) || document;
+                return Array.from(scope.querySelectorAll('#selectProductSimple option, select.select-product option'))
                     .map(o => ({sku: o.value, text: (o.textContent || '').trim()}))
-                    .filter(o => o.sku && o.text && !/Sélectionnez/i.test(o.text))
-            """)
+                    .filter(o => o.sku && o.text && !/Sélectionnez/i.test(o.text));
+            }""" % json.dumps(_MAIN_FORM_SEL))
             size_re = re.compile(r'(\d+(?:[\.,]\d+)?\s*[Kk]?[Gg])')
             by_size = {}
             for v in variants:
@@ -1078,7 +1104,9 @@ async def scrape_product(page, url: str) -> list:
         if not sizes:
             text = await page.evaluate("document.body.innerText")
             port_data = parse_port_line(text)
-            price_raw = await page.evaluate(
+            # Le premier `[data-price-type=finalPrice]` du document peut être
+            # celui d'un produit associé : prix du produit principal d'abord.
+            price_raw = await page.evaluate(_MAIN_PRICE_JS) or await page.evaluate(
                 "document.querySelector('[data-price-type=\"finalPrice\"] .price')?.innerText || ''"
             )
             en_stock = await page.evaluate(_STOCK_CHECK_JS)
@@ -1095,10 +1123,11 @@ async def scrape_product(page, url: str) -> list:
                 # Legacy : click sur label
                 price_amount = option_price_map.get(sz["value"])
                 try:
-                    await page.click(f'label[for="{sz["id"]}"]')
-                    await page.wait_for_timeout(CLICK_WAIT)
+                    await page.click(f'label[for="{sz["id"]}"]', timeout=5_000)
                 except Exception:
-                    pass
+                    # Libellé englobant (sans `for`) : on clique l'input lui-même.
+                    await page.evaluate("id => document.getElementById(id)?.click()", sz["id"])
+                await page.wait_for_timeout(CLICK_WAIT)
                 if price_amount is not None:
                     price_str = f"{price_amount:.2f}"
             else:
@@ -1118,6 +1147,15 @@ async def scrape_product(page, url: str) -> list:
                         break
                     except Exception:
                         continue
+
+            # Filet de sécurité : prix absent du spconfig → on lit le prix affiché
+            # pour la variante qu'on vient de sélectionner.
+            if price_str is None:
+                dom_price = _to_float(await page.evaluate(_MAIN_PRICE_JS))
+                if dom_price is not None:
+                    price_str = f"{dom_price:.2f}"
+                log_error(url, f"Prix de « {sz['label']} » absent du spconfig "
+                               f"({len(option_price_map)} options connues) → page : {price_str}")
 
             # Stock par variante (après sélection/click).
             en_stock = await page.evaluate(_STOCK_CHECK_JS)
@@ -3454,6 +3492,11 @@ def generate_api(sites: list) -> Path:
                 "type": it["type"], "family": family, "categorie": it["categorie"],
                 "tags": sorted(set(it["sweeteners"] + it["wheyTypes"] + it["typeTags"])),
                 "badges": it.get("badges", []), "sizes": [],
+                # Composition : permet à l'extension de recalculer le coût réel
+                # avec le prix et la taille AFFICHÉS sur la page (promo du
+                # moment, taille choisie), pas seulement ceux du dernier relevé.
+                "nutri": {"prot": it.get("prot"), "epa": it.get("epa"), "dha": it.get("dha")},
+                "ranked": kind != "whey" or it["categorie"] == "Whey",
             })
             offer = {
                 "size": it["taille"], "price": it["prix"], "metric": metric,
@@ -3468,11 +3511,14 @@ def generate_api(sites: list) -> Path:
                     and (kind != "whey" or it["categorie"] == "Whey")):
                 offers.append((family, metric, offer, prod))
 
-    best = {}
+    best, ranking = {}, {}
     for family in sorted({o[0] for o in offers}):
         pool = sorted((o for o in offers if o[0] == family), key=lambda o: o[1])
         for i, (_, _, offer, _) in enumerate(pool, 1):
             offer["rank"], offer["of"] = i, len(pool)
+        # Toutes les offres classées, pour recalculer un rang « en direct »
+        # côté extension : [coût réel, clé produit, taille].
+        ranking[family] = [[m, prod["key"], offer["size"]] for _, m, offer, prod in pool]
         best[family] = [
             {"key": prod["key"], "site": prod["site"], "url": prod["url"], "name": prod["name"],
              "size": offer["size"], "price": offer["price"], "metric": m}
@@ -3491,6 +3537,7 @@ def generate_api(sites: list) -> Path:
             "omega3": "oméga-3", "creatine": "créatines",
         },
         "best": best,
+        "ranking": ranking,
         "products": sorted(products.values(), key=lambda p: p["key"]),
     }
     out = DOCS_DIR / API_DOCS
