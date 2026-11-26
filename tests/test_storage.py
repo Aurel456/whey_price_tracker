@@ -127,3 +127,30 @@ def test_price_stats():
     assert st["since"] == "2026-07-01"
     # Historique en escalier : un point par changement de prix + le dernier jour.
     assert st["history"] == [["2026-09-01", 25.0], ["2026-10-20", 28.0], ["2026-11-02", 29.0]]
+
+
+def test_promo_check_compares_to_30_day_low():
+    """Badge Black Friday : prix de l'événement vs plus bas des 30 jours avant."""
+    ev = [{"name": "BF", "start": "2026-11-23", "end": "2026-11-29"}]
+    pts = lambda *pp: [{"date": d, "prix": p} for d, p in pp]
+    # Baisse réelle sous le plus bas 30 j (59,99), pas seulement sous la médiane.
+    real = core._promo_check(pts(("2026-10-01", 40.0), ("2026-11-01", 74.99),
+                                 ("2026-11-10", 59.99), ("2026-11-24", 49.95)), ev)
+    assert real["real"] and real["ref"] == 59.99 and real["pct"] == -16.7
+    # Remise affichée mais même prix qu'au plus bas du mois : fausse promo.
+    fake = core._promo_check(pts(("2026-11-05", 20.0), ("2026-11-20", 24.0),
+                                 ("2026-11-24", 20.0)), ev)
+    assert not fake["real"] and fake["pct"] == 0
+    # Hors événement, ou sans historique avant l'événement : pas de badge.
+    assert core._promo_check(pts(("2026-11-10", 20.0), ("2026-11-30", 18.0)), ev) is None
+    assert core._promo_check(pts(("2026-11-24", 20.0)), ev) is None
+
+
+def test_site_events_filter_by_slug(monkeypatch):
+    monkeypatch.setattr(core, "PROMO_EVENTS", [
+        {"name": "A", "start": "2026-01-01", "end": "2026-01-02", "sites": ["hsn"]},
+        {"name": "B", "start": "2026-01-01", "end": "2026-01-02", "sites": None},
+    ])
+    assert [e["name"] for e in core._site_events(core.HSN_CFG)] == ["A", "B"]
+    mp = core.SiteConfig(**{**core.HSN_CFG.__dict__, "slug": "myprotein"})
+    assert [e["name"] for e in core._site_events(mp)] == ["B"]

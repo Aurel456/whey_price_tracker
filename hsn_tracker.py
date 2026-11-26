@@ -1219,6 +1219,45 @@ async def scrape_product(page, url: str) -> list:
 STALE_SIZE_DAYS = 3        # au-delà : la ligne passe "inactive" (plus vue au scrape)
 INACTIVE_DROP_DAYS = 30    # au-delà : la ligne est retirée pour de bon
 
+# Temps forts promotionnels : bande colorée sur les courbes d'évolution et, tant
+# que l'événement dure, badge comparant le prix au plus bas des PROMO_REF_DAYS
+# jours qui le précèdent (la référence imposée par la directive Omnibus pour
+# afficher une réduction). `sites` = slugs concernés, None = tous les sites.
+# Ajouter les soldes ou un Prime Day = une ligne ici.
+PROMO_EVENTS = [
+    {"name": "Black Friday", "start": "2026-11-23", "end": "2026-11-29", "sites": ["hsn"]},
+]
+PROMO_REF_DAYS = 30
+PROMO_TIE_PCT = 1.0        # sous 1 % d'écart avec le plus bas 30 j : « pas mieux qu'avant »
+
+
+def _site_events(cfg: "SiteConfig") -> list:
+    return [e for e in PROMO_EVENTS if not e.get("sites") or cfg.slug in e["sites"]]
+
+
+def _promo_check(hist: list, events: list):
+    """Compare le dernier prix de `hist` (points triés par date) au plus bas des
+    PROMO_REF_DAYS jours précédant l'événement en cours à cette date.
+
+    Renvoie None hors événement ou sans historique de référence. Le prix nominal
+    (pas le €/kg protéine) : c'est lui que le site annonce en promo, et la taille
+    est la même de part et d'autre.
+    """
+    if not hist or hist[-1].get("prix") is None:
+        return None
+    day, price = hist[-1]["date"], hist[-1]["prix"]
+    ev = next((e for e in events if e["start"] <= day <= e["end"]), None)
+    if ev is None:
+        return None
+    ref_lo = (date.fromisoformat(ev["start"]) - timedelta(days=PROMO_REF_DAYS)).isoformat()
+    ref = [h["prix"] for h in hist if ref_lo <= h["date"] < ev["start"] and h["prix"] is not None]
+    if not ref:
+        return None
+    ref_min = min(ref)
+    pct = (price - ref_min) / ref_min * 100
+    return {"event": ev["name"], "ref": ref_min, "pct": round(pct, 1),
+            "real": pct <= -PROMO_TIE_PCT}
+
 
 def _activity_status(latest: dict) -> dict:
     """Classe chaque ligne de `latest` (keyé par (produit, taille)) en active /
@@ -1296,9 +1335,12 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
     activity = _activity_status(latest)
 
     # Calcule moyenne historique (hors dernière date) + flag deal
+    events = _site_events(cfg)
     deal_meta = {}
+    promo_by_key = {}
     for key, hist in history_by_key.items():
         hist.sort(key=lambda x: x["date"])
+        promo_by_key[key] = _promo_check(hist, events)
         latest_date = hist[-1]["date"] if hist else None
         previous_pxp = [h["pxkgProt"] for h in hist if h["date"] != latest_date and h["pxkgProt"] is not None]
         avg = (sum(previous_pxp) / len(previous_pxp)) if previous_pxp else None
@@ -1365,6 +1407,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
             "avgPxkgProt": meta.get("avg"),
             "isDeal":      meta.get("isDeal", False),
             "histLen":     meta.get("histLen", 0),
+            "promo":       promo_by_key.get(key),
             "categorie":   str(r.get("Catégorie") or _detect_category(r.get("Protéines (g/100g)"))),
             "sweeteners":  sweeteners,
             "wheyTypes":   whey_types,
@@ -1472,6 +1515,10 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         ".deal-badge { display: inline-block; background: #FF6B35; color: #fff;"
         " font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px;"
         " margin-left: 6px; vertical-align: middle; letter-spacing: 0.3px; }\n"
+        ".promo-badge { display: inline-block; font-size: 9px; font-weight: 700; padding: 1px 5px;"
+        " border-radius: 3px; margin-left: 6px; vertical-align: middle; cursor: help; }\n"
+        ".promo-badge.real { background: #E6F4EA; color: #1E7B34; border: 0.5px solid #B7DFC2; }\n"
+        ".promo-badge.fake { background: #EFEFEF; color: #666; border: 0.5px solid #DADADA; }\n"
         ".oos-badge { display: inline-block; background: #FFF0EE; color: #B23B3B;"
         " border: 0.5px solid #F5C7C7; font-size: 9px; font-weight: 700; padding: 1px 5px;"
         " border-radius: 3px; margin-left: 6px; vertical-align: middle; }\n"
@@ -1693,6 +1740,8 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "</div>\n"
         f"<script>\nconst RAW = {data_json};\n"
         f"const HISTORY = {history_json};\n"
+        f"const PROMO_EVENTS = {json.dumps(events, ensure_ascii=False)};\n"
+        f"const PROMO_TIE = {PROMO_TIE_PCT};\n"
         f"const SWEETENER_LABELS = {json.dumps(SWEETENER_LABELS, ensure_ascii=False)};\n"
         f"const WHEY_TYPE_LABELS = {json.dumps(WHEY_TYPE_LABELS, ensure_ascii=False)};\n"
         f"const OMEGA3_TYPE_LABELS = {json.dumps(OMEGA3_TYPE_LABELS, ensure_ascii=False)};\n"
@@ -1993,6 +2042,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "  }\n"
         "  document.getElementById('tableBody').innerHTML=f.map(r=>{\n"
         "    const dealBadge = r.isDeal ? `<span class='deal-badge' title='Sous la moyenne historique de plus de 5%'>🔥 DEAL</span>` : '';\n"
+        "    const promoBadge = promoBadgeHtml(r);\n"
         "    const missing = (currentTab==='whey' && isMissingInfo(r)) ? `<span class='missing-pill' title='Pas (ou peu) d&apos;info détectée — clic ✏️ pour annoter'>❓ à classer</span>` : '';\n"
         "    const oosBadge = r.en_stock === false ? `<span class='oos-badge' title='Rupture de stock détectée au dernier scraping'>⚠️ Rupture</span>` : '';\n"
         "    const inactifBadge = r.actif === false ? `<span class='inactif-badge' title='Plus vu au scraping depuis ${r.joursAbsent} jour(s) — sans doute retiré du catalogue. Prix affiché = dernier connu.'>💤 Inactif</span>` : '';\n"
@@ -2001,7 +2051,7 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "    const editBtn = `<button class='edit-btn' title='Éditer tags &amp; note' onclick='openEditModal(${escapeHtml(JSON.stringify(r.produit))})'>✏️</button>`;\n"
         "    const cells = cols.map(c=>{\n"
         "      if(c.k==='produit'){\n"
-        "        return `<td title='${escapeHtml(r.produit)}' style='white-space:normal;overflow:visible;'><a href='${r.url}' target='_blank'>${escapeHtml(r.produit)}</a>${editBtn}${dealBadge}${missing}${oosBadge}${inactifBadge}<div style='margin-top:3px;white-space:normal;'>${renderChips(r)}</div>${noteLine}</td>`;\n"
+        "        return `<td title='${escapeHtml(r.produit)}' style='white-space:normal;overflow:visible;'><a href='${r.url}' target='_blank'>${escapeHtml(r.produit)}</a>${editBtn}${dealBadge}${promoBadge}${missing}${oosBadge}${inactifBadge}<div style='margin-top:3px;white-space:normal;'>${renderChips(r)}</div>${noteLine}</td>`;\n"
         "      }\n"
         "      const align = c.num ? 'text-align:right' : '';\n"
         "      const isBest = c.best && bestVals[c.k]!=null && r[c.k]===bestVals[c.k];\n"
@@ -2228,6 +2278,41 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "  buildTrendRangeChips();\n"
         "  buildTrendChart();\n"
         "}\n"
+        "// ── Temps forts promo (PROMO_EVENTS, côté Python) ──\n"
+        "function promoAt(d){ return PROMO_EVENTS.find(e=>d>=e.start&&d<=e.end); }\n"
+        "function promoBadgeHtml(r){\n"
+        "  // Prix pendant l'événement vs plus bas des 30 jours qui le précèdent.\n"
+        "  const p=r.promo; if(!p) return '';\n"
+        "  const pct=Math.round(Math.abs(p.pct));\n"
+        "  const ctx=`${p.event} : ${fmt(r.prix,2)}, plus bas des 30 jours précédents : ${fmt(p.ref,2)}`;\n"
+        "  if(p.real) return `<span class='promo-badge real' title='${escapeHtml(ctx)} (vraie baisse)'>✓ −${pct} % vs 30 j</span>`;\n"
+        "  const why = p.pct>=PROMO_TIE ? `${pct} % plus cher` : 'même prix';\n"
+        "  return `<span class='promo-badge fake' title='${escapeHtml(ctx)} (${why})'>⚠ pas mieux qu&apos;avant</span>`;\n"
+        "}\n"
+        "// Bande colorée sous les courbes pendant chaque événement. Les courbes sont en\n"
+        "// escalier 'before' : le prix du jour d est tracé entre d-1 et d, donc la bande\n"
+        "// part du point qui précède le 1er jour pour coller aux prix de l'événement.\n"
+        "const promoBandPlugin={id:'promoBand',beforeDatasetsDraw(chart){\n"
+        "  const labels=chart.data.labels||[]; if(!labels.length||!PROMO_EVENTS.length) return;\n"
+        "  const x=chart.scales.x, a=chart.chartArea, c=chart.ctx;\n"
+        "  PROMO_EVENTS.forEach(ev=>{\n"
+        "    const i0=labels.findIndex(d=>d>=ev.start);\n"
+        "    let i1=-1; for(let i=labels.length-1;i>=0;i--){ if(labels[i]<=ev.end){i1=i;break;} }\n"
+        "    if(i0<0||i1<i0) return;\n"
+        "    const left=x.getPixelForValue(Math.max(0,i0-1)), right=x.getPixelForValue(i1);\n"
+        "    const w=Math.max(right-left,4);\n"
+        "    c.save();\n"
+        "    c.fillStyle='rgba(255,107,53,0.12)'; c.fillRect(left,a.top,w,a.bottom-a.top);\n"
+        "    c.strokeStyle='rgba(255,107,53,0.45)'; c.setLineDash([3,3]); c.lineWidth=1;\n"
+        "    c.beginPath(); c.moveTo(left,a.top); c.lineTo(left,a.bottom); c.moveTo(left+w,a.top); c.lineTo(left+w,a.bottom); c.stroke();\n"
+        "    c.fillStyle='#C2410C'; c.font='600 11px system-ui,sans-serif'; c.textAlign='center'; c.textBaseline='top';\n"
+        "    // Libellé centré sur la bande mais gardé dans le graphique (bande étroite au bord droit pendant l'événement).\n"
+        "    const tw=c.measureText(ev.name).width/2+3;\n"
+        "    c.fillText(ev.name, Math.min(Math.max(left+w/2, a.left+tw), a.right-tw), a.top+4);\n"
+        "    c.restore();\n"
+        "  });\n"
+        "}};\n"
+        "function promoTooltipTitle(items){ const d=items[0]&&items[0].label; const e=d&&promoAt(d); return e?`${d} · ${e.name}`:d; }\n"
         "function getTrendDateWindow(){\n"
         "  // Renvoie [dateMin, dateMax] (strings ISO) selon le state courant.\n"
         "  const n = TREND_ALL_DATES.length;\n"
@@ -2264,11 +2349,11 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "  }).filter(Boolean);\n"
         "  chartTrend=new Chart(document.getElementById('chartTrend'),{\n"
         "    type:'line',\n"
-        "    data:{labels:allDates,datasets},\n"
+        "    data:{labels:allDates,datasets},plugins:[promoBandPlugin],\n"
         "    options:{responsive:true,maintainAspectRatio:false,\n"
         "      plugins:{legend:{display:datasets.length>1,position:'top',labels:{font:{size:11},"
         "boxWidth:12}},\n"
-        "        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?fmt(ctx.parsed.y,decs,unit):'N/A'}`}}},\n"
+        "        tooltip:{callbacks:{title:promoTooltipTitle,label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?fmt(ctx.parsed.y,decs,unit):'N/A'}`}}},\n"
         "      scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:35}},\n"
         "        y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},"
         "callback:v=>fmt(v,decs,unit)},beginAtZero:false,"
@@ -2302,11 +2387,11 @@ def generate_dashboard(rows=None, cfg: "SiteConfig" = HSN_CFG):
         "  }).filter(Boolean);\n"
         "  chartTrendPrice=new Chart(canvas,{\n"
         "    type:'line',\n"
-        "    data:{labels:allDates,datasets},\n"
+        "    data:{labels:allDates,datasets},plugins:[promoBandPlugin],\n"
         "    options:{responsive:true,maintainAspectRatio:false,\n"
         "      plugins:{legend:{display:datasets.length>1,position:'top',labels:{font:{size:11},"
         "boxWidth:12}},\n"
-        "        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?fmt(ctx.parsed.y,2):'N/A'}`}}},\n"
+        "        tooltip:{callbacks:{title:promoTooltipTitle,label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?fmt(ctx.parsed.y,2):'N/A'}`}}},\n"
         "      scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:35}},\n"
         "        y:{grid:{color:'rgba(0,0,0,0.06)'},ticks:{font:{size:11},"
         "callback:v=>fmt(v,2)},beginAtZero:false,"
