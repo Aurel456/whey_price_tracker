@@ -5518,3 +5518,38 @@ Date,Produit,URL,Taille,Prix (€),Portions,Coût/portion (€),Prix/kg (€),DD
 2026-11-25,Omégas 3 végans,https://fr.myprotein.com/p/nutrition-sportive/omegas-3-vegans/13633515/,90 gélules,15,,,166.67,,,,,,,,,,,,,Oméga-3,omega3,,200,0.833,,,True
 2026-11-25,Oméga-3 Plus végan,https://fr.myprotein.com/p/nutrition-sportive/omega-3-plus-vegan/11447800/,90 gélules,15,,,166.67,,,,,,,,,,,,,Oméga-3,omega3,125,250,0.444,,,False
 2026-11-25,Oméga-3 Plus végan,https://fr.myprotein.com/p/nutrition-sportive/omega-3-plus-vegan/11447800/,180 gélules,31.99,,,177.72,,,,,,,,,,,,,Oméga-3,omega3,125,250,0.474,,,False
+2026-11-26,Impact Whey Protein,https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/,15 portions (345g),16.99,,,49.25,,68.4,2.052,72,379,8.9,5.9,0.44,,,,,Whey,whey,,,,,,True
+2026-11-26,Impact Whey Protein,https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/,30 portions (840g),23.03,,,27.42,,38.08,1.142,72,379,8.9,5.9,0.44,,,,,Whey,whey,,,,,,True
+2026-11-26,Impact Whey Protein,https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/,60 portions (1.8kg),61.99,,,34.44,,47.83,1.435,72,379,8.9,5.9,0.44,,,,,Whey,whey,,,,,,True
+2026-11-26,Impact Whey Protein,https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/,90 portions (2.1kg),77.99,,,37.68,,52.33,1.57,72,379,8.9,5.9,0.44,,,,,Whey,whey,,,,,,True
+2026-11-26,Impact Whey Protein,https://fr.myprotein.com/p/nutrition-sportive/impact-whey-protein/10530943/,120 portions (3.6kg),105.99,,,29.44,,40.89,1.227,72,379,8.9,5.9,0.44,,,,,Whey,whey,,,,,,True
+2026-11-26,Impact Whey Isolate,https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/,15 portions (480g),24.99,,,52.06,,63.49,1.905,82,361,6.1,0.9,0.65,,,,,Whey,whey,,,,,,True
+2026-11-26,Impact Whey Isolate,https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/,30 portions (990g),40.99,,,41.4,,50.49,1.515,82,361,6.1,0.9,0.65,,,,,Whey,whey,,,,,,True
+2026-11-26,Impact Whey Isolate,https://fr.myprotein.com/p/nutrition-sportive/impact-whey-isolate/10530911/,90 portions (2.7kg),114.99,,,42.59,,51.94,1.558,82,361,6.1,0.9,0.65,,,,,Whey,whey,,,,,,True
+2026-11-26,Clear Whey Isolate,https://fr.myprotein.com/p/nutrition-sportive/clear-whey-isolate/12081395/,20 portions (300g),24.59,,,81.97,,103.76,3.113,79,331,3.1,0,0.09,,,,,Whey,whey,,,,,,True
+2026-11-26,Clear Whey Isolate,https://fr.myprotein.com/p/nutrition-sportive/clear-whey-isolate/12081395/,60 portions (1.5kg),66.99,,,44.66,,56.53,1.696,79,331,3.1,0,0.09,,,,,Whey,whey,,,,,,True
+2026-11-26,Impact Diet Whey,https://fr.myprotein.com/p/nutrition-sportive/impact-diet-whey/10530657/,7 portions (420g),19.49,,,46.4,,80,2.4,58,358,12,6.4,0.3,,,,,Aliments enrichis,whey,,,,,,True
+2026-11-26,Impact Diet Whey,https://fr.myprotein.com/p/nutrition-sportive/impact-diet-whey/10530657/,15 portions (900g),32.99,,,36.66,,63.21,1.896,58,358,12,6.4,0.3,,,,,Aliments enrichis,whey,,,,,,True
+2026-11-26,Impact Diet Whey,https://fr.myprotein.com/p/nutrition-sportive/impact-diet-whey/10530657/,30 portions (1.8kg),53.99,,,29.99,,51.71,1.551,58,358,12,6.4,0.3,,,,,Aliments enrichis,whey,,,,,,True
+2026-11-26,Isolat de protéine de soja,https://fr.myprotein.com/p/nutrition-sportive/isolat-de-proteine-de-soja/10529701/,15 portions (450g),10.99,,,24.42,,32.13,0.964,76,344,3.8,1.9,2.7,,,,,Whey,whey,,,,,,True
+2026-11-26,Isolat de protéine de soja,https://fr.myprotein.com/p/nutrition-sportive/isolat-de-proteine-de-soja/10529701/,30 portions (900g),16.99,,,18.88,,24.84,0.745,76,344,3.8,1.9,2.7,,,,,Whey,whey,,,,,,True
+2026-11-26,Isolat de protéine de soja,https://fr.myprotein.com/p/nutrition-sportive/isolat-de-proteine-de-soja/10529701/,90 portions (2.7kg),48.99,,,18.14,,23.87,0.716,76,344,3.8,1.9,2.7,,,,,Whey,whey,,,,,,True
+2026-11-26,Isolat de protéine de pois,https://fr.myprotein.com/p/nutrition-sportive/isolat-de-proteine-de-pois/10530136/,15 portions (480g),7.99,,,16.65,,25.62,0.769,65,368,9.9,6.7,2.5,,,,,Aliments enrichis,whey,,,,,,True
+2026-11-26,Isolat de protéine de pois,https://fr.myprotein.com/p/nutrition-sportive/isolat-de-proteine-de-pois/10530136/,30 portions (960g),13.99,,,14.57,,22.42,0.673,65,368,9.9,6.7,2.5,,,,,Aliments enrichis,whey,,,,,,True
+2026-11-26,Isolat de protéine de pois,https://fr.myprotein.com/p/nutrition-sportive/isolat-de-proteine-de-pois/10530136/,90 portions (2.7kg),38.99,,,14.44,,22.22,0.667,65,368,9.9,6.7,2.5,,,,,Aliments enrichis,whey,,,,,,True
+2026-11-26,Impact Plant Protein,https://fr.myprotein.com/p/nutrition-sportive/proteine-vegan-impact/11776868/,15 portions (450g),10.99,,,24.42,,33,0.99,74,385,5.6,6.6,2.6,,,,,Whey,whey,,,,,,True
+2026-11-26,Impact Plant Protein,https://fr.myprotein.com/p/nutrition-sportive/proteine-vegan-impact/11776868/,30 portions (900g),17.99,,,19.99,,27.01,0.81,74,385,5.6,6.6,2.6,,,,,Whey,whey,,,,,,True
+2026-11-26,Impact Plant Protein,https://fr.myprotein.com/p/nutrition-sportive/proteine-vegan-impact/11776868/,90 portions (2.7kg),50.99,,,18.89,,25.53,0.766,74,385,5.6,6.6,2.6,,,,,Whey,whey,,,,,,True
+2026-11-26,Créatine Monohydrate en poudre,https://fr.myprotein.com/p/nutrition-sportive/creatine-monohydrate-en-poudre/10530050/,100g,5,,,50,,,,,,,,,,,,,Créatine,creatine,,,,,50,True
+2026-11-26,Créatine Monohydrate en poudre,https://fr.myprotein.com/p/nutrition-sportive/creatine-monohydrate-en-poudre/10530050/,250g,5,,,20,,,,,,,,,,,,,Créatine,creatine,,,,,20,True
+2026-11-26,Créatine Monohydrate en poudre,https://fr.myprotein.com/p/nutrition-sportive/creatine-monohydrate-en-poudre/10530050/,500g,10,,,20,,,,,,,,,,,,,Créatine,creatine,,,,,20,True
+2026-11-26,Créatine Monohydrate en poudre,https://fr.myprotein.com/p/nutrition-sportive/creatine-monohydrate-en-poudre/10530050/,1kg,20,,,20,,,,,,,,,,,,,Créatine,creatine,,,,,20,True
+2026-11-26,THE Creatine Creapure®,https://fr.myprotein.com/p/nutrition-sportive/the-creatine-creapure/10529740/,250g,28.99,,,115.96,,,,,,,,,,,,,Créatine,creatine,,,,,115.96,True
+2026-11-26,THE Creatine Creapure®,https://fr.myprotein.com/p/nutrition-sportive/the-creatine-creapure/10529740/,500g,52.99,,,105.98,,,,,,,,,,,,,Créatine,creatine,,,,,105.98,True
+2026-11-26,THE Creatine Creapure®,https://fr.myprotein.com/p/nutrition-sportive/the-creatine-creapure/10529740/,1kg,97.99,,,97.99,,,,,,,,,,,,,Créatine,creatine,,,,,97.99,True
+2026-11-26,Oméga 3 en gélules,https://fr.myprotein.com/p/nutrition-sportive/omega-3-en-gelules/10529329/,90 gélules,5,,,55.56,,,,,,,,,,,,,Oméga-3,omega3,180,120,0.185,,,True
+2026-11-26,Oméga 3 en gélules,https://fr.myprotein.com/p/nutrition-sportive/omega-3-en-gelules/10529329/,250 gélules,15,,,60,,,,,,,,,,,,,Oméga-3,omega3,180,120,0.2,,,True
+2026-11-26,Omégas 3 végans,https://fr.myprotein.com/p/nutrition-sportive/omegas-3-vegans/13633515/,30 gélules,5,,,166.67,,,,,,,,,,,,,Oméga-3,omega3,,200,0.833,,,True
+2026-11-26,Omégas 3 végans,https://fr.myprotein.com/p/nutrition-sportive/omegas-3-vegans/13633515/,90 gélules,15,,,166.67,,,,,,,,,,,,,Oméga-3,omega3,,200,0.833,,,True
+2026-11-26,Oméga-3 Plus végan,https://fr.myprotein.com/p/nutrition-sportive/omega-3-plus-vegan/11447800/,90 gélules,15,,,166.67,,,,,,,,,,,,,Oméga-3,omega3,125,250,0.444,,,False
+2026-11-26,Oméga-3 Plus végan,https://fr.myprotein.com/p/nutrition-sportive/omega-3-plus-vegan/11447800/,180 gélules,28.99,,,161.06,,,,,,,,,,,,,Oméga-3,omega3,125,250,0.429,,,False
