@@ -366,6 +366,7 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
     ignoré). Le prompt système impose de ne recommander que les offres fournies.
     Le contexte envoyé est construit par `aiContext()`.
     Serveur hors Groq → permission d'hôte optionnelle demandée à l'enregistrement.
+- **v0.4 : lisibilité.** La jauge 90 j n'est plus que dans « Ta sélection », avec ses bornes **sous** la piste : à côté, elles collaient au point. Les lignes du tableau n'ont donc plus de jauge, et le tableau a des en-têtes. Le rang s'affiche en clair (« 6ᵉ sur 43 »), pas « #6/43 ». La meilleure alternative est dans un encart à part. Le Conseiller n'affiche plus de rang : l'ordre de la liste en est déjà un, et « #1/8 » à côté de « #1/43 » mélangeait les familles. Il affiche la gamme à la place. Pendant un `PROMO_EVENTS`, l'API porte `sizes[].promo` (`{event, ref, pct, real}`), et `promoChip()` recalcule l'écart avec le prix **affiché** à partir de `ref`.
 - Tester l'encart sans navigateur connecté : script Playwright qui intercepte
   (`page.route`) les URL HSN/MyProtein avec une fausse fiche, sert l'API locale
   et simule `chrome.*` (storage + runtime.sendMessage → listener du background).

@@ -182,24 +182,39 @@
     return [`+${pct} % vs plus bas`, pct >= 10 ? 'warn' : 'neutral'];
   }
 
-  // Jauge plus bas ↔ plus haut sur 90 jours, avec le prix placé dessus.
+  // Jauge plus bas ↔ plus haut sur 90 jours, avec le prix placé dessus. Les
+  // bornes sont SOUS la piste : à côté, elles collaient au point aux extrémités.
   // (Une courbe ne marche pas : HSN alterne promo / prix normal tous les 2-3
   // jours, ça donne un code-barres illisible à cette taille.)
   function rangeBar(s, price = s.price) {
     if (s.min90 == null || s.max90 == null || s.max90 - s.min90 < 0.01) return '';
     const pos = Math.max(0, Math.min(1, (price - s.min90) / (s.max90 - s.min90))) * 100;
-    return `<div class="range" title="Sur 90 jours : de ${num(s.min90)} € à ${num(s.max90)} €">`
-      + `<span class="lo">${num(s.min90)}</span>`
+    return `<div class="range" title="Ton prix entre le plus bas et le plus haut des 90 derniers jours">`
       + `<span class="track"><span class="dot" style="left:${pos.toFixed(0)}%"></span></span>`
-      + `<span class="hi">${num(s.max90)}</span></div>`;
+      + `<span class="ends"><span>plus bas 90 j · ${num(s.min90)} €</span><span>plus haut · ${num(s.max90)} €</span></span></div>`;
   }
 
+  const ordinal = (n) => (n === 1 ? '1<sup>er</sup>' : `${n}<sup>e</sup>`);
+  // « Top » = n°1, ou podium d'une famille assez grande pour que ça veuille dire quelque chose.
+  const isTop = (r) => r.rank === 1 || (r.of >= 10 && r.rank <= 3);
+
+  // Rang compact pour les lignes : « 6e sur 43 ».
   const rankHtml = (r) => {
     if (!r || !r.rank) return '';
-    // « Top » = n°1, ou podium d'une famille assez grande pour que ça veuille dire quelque chose.
-    const top = r.rank === 1 || (r.of >= 10 && r.rank <= 3);
-    return `<span class="sub rank${top ? ' top' : ''}" title="Classement au coût réel dans sa famille, tous sites confondus">#${r.rank}/${r.of}</span>`;
+    return `<span class="sub rank${isTop(r) ? ' top' : ''}" title="Classement au coût réel parmi les ${esc(res?.familyLabel || 'offres')} suivies, tous sites confondus">${ordinal(r.rank)} sur ${r.of}</span>`;
   };
+
+  // Verdict d'un temps fort promo (Black Friday…) : prix affiché vs plus bas des
+  // 30 jours qui le précèdent, la référence légale d'une réduction (Omnibus).
+  function promoChip(s, price) {
+    const p = s?.promo;
+    if (!p || !p.ref) return '';
+    const pct = Math.round((price / p.ref - 1) * 100);
+    const title = `Plus bas des 30 jours avant le ${esc(p.event)} : ${num(p.ref)} €`;
+    return pct <= -1
+      ? `<span class="chip good" title="${title}">${esc(p.event)} : vraie baisse, −${-pct} %</span>`
+      : `<span class="chip warn" title="${title}">${esc(p.event)} : pas mieux qu'avant${pct > 0 ? ` (+${pct} %)` : ''}</span>`;
+  }
 
   const STYLE = `
     :host { all: initial; }
@@ -211,7 +226,7 @@
         --accent:#7aa7ff; --accent-bg:#1f2a40; --good:#5fd3a2; --good-bg:#173a2c; --warn:#f2b45c; --warn-bg:#3d2c12; }
     }
     /* right / bottom posés en ligne par applyPos() : la bulle se déplace. */
-    .card { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 350px;
+    .card { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 360px;
       max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto;
       background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
       box-shadow: 0 10px 30px rgba(0,0,0,.18); }
@@ -263,24 +278,40 @@
     .answer ul { margin: 4px 0; padding-left: 16px; }
     button.icon { all: unset; cursor: pointer; color: var(--muted); padding: 2px 6px; border-radius: 6px; font-size: 15px; }
     button.icon:hover, button.icon:focus-visible { background: var(--soft); color: var(--ink); }
-    .name { padding: 0 12px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    sup { font-size: .7em; line-height: 0; vertical-align: super; }
+    .pname { padding: 0 12px; font-size: 14px; font-weight: 700; line-height: 1.3;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .unit { padding: 2px 12px 8px; font-size: 11px; color: var(--muted); }
-    .live { margin: 0 12px 10px; padding: 10px 12px; border-radius: 10px; background: var(--accent-bg);
+    .lbl { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+    .live { margin: 0 12px 10px; padding: 10px 12px 12px; border-radius: 10px; background: var(--accent-bg);
       border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
-    .live .lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
-    .live .row1 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 2px; }
-    .live .sel { font-weight: 700; }
-    .live .big { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
-    .live .row2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
-    .live .note { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .live .lbl { color: var(--accent); }
+    .row1 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .live .sel { font-weight: 600; white-space: nowrap; }
+    .hero { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; margin-top: 4px; }
+    .hero .big { font-size: 26px; line-height: 1.15; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .hero .u { color: var(--muted); font-size: 12px; }
+    .rankline { font-size: 12px; margin-top: 2px; }
+    .rankline.top { color: var(--good); font-weight: 600; }
+    .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    .live .note { font-size: 11px; color: var(--muted); margin-top: 8px; }
+    .alt { margin: 10px 12px 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+    .alt.win { background: var(--good-bg); border-color: transparent; }
+    .alt.win .lbl { color: var(--good); }
+    .alt .row1 { margin-top: 4px; }
+    .alt .row1.sub { margin-top: 2px; align-items: center; }
+    .alt a { color: var(--accent); font-weight: 600; text-decoration: none; }
+    .alt a:hover { text-decoration: underline; }
     /* Tables : héritage explicite, sinon une page en mode quirks casse police et couleur. */
     table { width: 100%; border-collapse: collapse; font: inherit; color: inherit; }
-    td { padding: 7px 12px; border-top: 1px solid var(--line); vertical-align: middle; }
+    th { padding: 4px 12px; text-align: left; font-size: 11px; font-weight: 600; color: var(--muted); vertical-align: bottom; }
+    th .sub { font-size: 10px; }
+    td { padding: 8px 12px; border-top: 1px solid var(--line); vertical-align: middle; }
     tr.on td { background: var(--accent-bg); }
     tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
     td.size { font-weight: 600; white-space: nowrap; }
-    td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-    .metric { font-weight: 700; }
+    td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .metric { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
     .sub { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
     .chip { display: inline-block; white-space: nowrap; font-size: 11px; padding: 1px 7px; border-radius: 999px;
       background: var(--soft); color: var(--muted); }
@@ -288,35 +319,42 @@
     .chip.warn { background: var(--warn-bg); color: var(--warn); }
     .rank { font-size: 11px; color: var(--muted); }
     .rank.top { color: var(--good); font-weight: 700; }
-    .range { display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 10px;
-      color: var(--muted); font-variant-numeric: tabular-nums; }
-    .track { position: relative; flex: 1; min-width: 40px; height: 4px; border-radius: 2px;
-      background: linear-gradient(90deg, var(--good-bg), var(--warn-bg)); }
-    .dot { position: absolute; top: 50%; width: 9px; height: 9px; border-radius: 50%;
+    .range { margin-top: 10px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .track { display: block; position: relative; height: 6px; border-radius: 3px; margin: 0 5px;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--good) 45%, transparent), color-mix(in srgb, var(--warn) 45%, transparent)); }
+    .dot { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
       background: var(--accent); border: 2px solid var(--bg); transform: translate(-50%, -50%); }
+    .ends { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; }
     .more { all: unset; display: block; width: 100%; box-sizing: border-box; padding: 6px 12px; cursor: pointer;
       text-align: center; font-size: 12px; color: var(--accent); border-top: 1px solid var(--line); }
     .more:hover, .more:focus-visible { background: var(--soft); }
-    .best { margin: 0; padding: 10px 12px; background: var(--soft); border-top: 1px solid var(--line); font-size: 12px; }
-    .best a, footer a { color: var(--accent); text-decoration: none; font-weight: 600; }
-    .best a:hover, footer a:hover { text-decoration: underline; }
+    footer a { color: var(--accent); text-decoration: none; font-weight: 600; }
+    footer a:hover { text-decoration: underline; }
+    .idx { display: inline-block; min-width: 16px; color: var(--muted); font-weight: 700; }
+    .list .bot { align-items: center; }
+    .list .chips { margin-top: 4px; }
     footer { display: flex; justify-content: space-between; gap: 8px; padding: 8px 12px 10px;
       font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); }
   `;
 
+  // Meilleure alternative de la même famille, en encart : le nom et le chiffre
+  // se lisent d'un coup d'œil, au lieu d'être noyés dans une phrase.
   function bestLine(ownBest) {
     const top = res.best[0];
     if (!top || !res.metric) return '';
     const family = res.familyLabel ? ` en ${esc(res.familyLabel)}` : '';
     if (top.key === res.product.key) {
       const of = res.product.sizes.find((s) => s.rank === 1)?.of;
-      return `<p class="best">🏆 Meilleur rapport au coût réel${family}${of > 1 ? ` (${of} références suivies)` : ''}.</p>`;
+      return `<section class="alt win"><div class="lbl">🏆 Meilleur rapport au coût réel</div>
+        <div class="sub">Le moins cher${family}${of > 1 ? ` parmi ${of} offres suivies` : ''}, tous sites confondus.</div></section>`;
     }
     const gap = ownBest ? Math.round((1 - top.metric / ownBest) * 100) : null;
-    const siteName = top.site === res.product.site ? '' : ` chez ${esc(res.sites[top.site]?.name || top.site)}`;
-    return `<p class="best">Moins cher${family}${siteName} : `
-      + `<a href="${esc(top.url)}" target="_blank" rel="noopener">${esc(top.name)}</a> (${esc(top.size)}) — `
-      + `<b>${num(top.metric, res.metric.decimals)} €</b> ${esc(res.metric.unit)}${gap > 0 ? ` · ${gap} % de moins` : ''}</p>`;
+    const siteName = esc(res.sites[top.site]?.name || top.site);
+    return `<section class="alt"><div class="lbl">Moins cher${family}</div>
+      <div class="row1"><a href="${esc(top.url)}" target="_blank" rel="noopener">${esc(top.name)}</a>
+        <span class="metric">${num(top.metric, res.metric.decimals)} €</span></div>
+      <div class="row1 sub"><span>${siteName} · ${esc(top.size)} · ${num(top.price)} €</span>
+        ${gap > 0 ? `<span class="chip good">−${gap} % au coût réel</span>` : ''}</div></section>`;
   }
 
   // Bloc « Ta sélection » : ce que la page affiche maintenant, recalculé.
@@ -330,26 +368,31 @@
       note = 'Taille absente de nos relevés : coût calculé avec le prix affiché.';
     } else {
       const diff = Math.round((sel.price / tracked.price - 1) * 100);
-      note = `Relevé du ${frDate(tracked.date)} : ${num(tracked.price)} €`
-        + (diff === 0 ? ' (identique)' : diff < 0 ? ` · ${-diff} % moins cher aujourd'hui` : ` · ${diff} % plus cher aujourd'hui`);
+      note = diff === 0 ? `Même prix qu'au relevé du ${frDate(tracked.date)}.`
+        : `Relevé du ${frDate(tracked.date)} : ${num(tracked.price)} €, soit ${Math.abs(diff)} % ${diff < 0 ? 'moins' : 'plus'} cher aujourd'hui.`;
     }
+    const rank = r ? `<div class="rankline${isTop(r) ? ' top' : ''}" title="Classement au coût réel, tous sites confondus">`
+      + `${ordinal(r.rank)} moins cher sur ${r.of}${res.familyLabel ? ` ${esc(res.familyLabel)}` : ''}</div>` : '';
+    const chips = [label ? `<span class="chip ${cls}">${esc(label)}</span>` : '', promoChip(tracked, sel.price)].join('');
     return `<section class="live" aria-live="polite">
-      <div class="lbl">Ta sélection</div>
-      <div class="row1"><span class="sel">${esc(sel.size || tracked?.size || '')}</span><span>${num(sel.price)} €</span></div>
-      <div class="row2">
-        <span>${metric != null ? `<span class="big">${num(metric, d)} €</span> ${unit}` : '<span class="sub">coût réel indisponible</span>'}</span>
-        ${r ? rankHtml(r).replace('class="sub ', 'class="') : ''}
-      </div>
-      ${label ? `<div class="row2"><span class="chip ${cls}">${esc(label)}</span>${rangeBar(tracked, sel.price)}</div>` : ''}
+      <div class="row1"><span class="lbl">Ta sélection</span><span class="sel">${esc(sel.size || tracked?.size || '')} · ${num(sel.price)} €</span></div>
+      <div class="hero">${metric != null
+        ? `<span class="big">${num(metric, d)} €</span><span class="u">${unit}</span>`
+        : '<span class="sub">coût réel indisponible</span>'}</div>
+      ${rank}
+      ${chips ? `<div class="chips">${chips}</div>` : ''}
+      ${tracked ? rangeBar(tracked, sel.price) : ''}
       <div class="note">${note}</div>
     </section>`;
   }
 
+  // Ligne du tableau : sans jauge (elle est dans « Ta sélection »), pour que
+  // les trois colonnes respirent.
   function rowHtml(s, d, on) {
     const [label, cls] = priceStatus(s);
     return `<tr${on ? ' class="on"' : ''}>
       <td class="size">${esc(s.size)}<span class="sub">${num(s.price)} €</span></td>
-      <td><span class="chip ${cls}">${esc(label)}</span>${rangeBar(s)}</td>
+      <td><span class="chip ${cls}">${esc(label)}</span></td>
       <td class="num"><span class="metric">${s.metric != null ? num(s.metric, d) + ' €' : '—'}</span>${rankHtml(s)}</td>
     </tr>`;
   }
@@ -366,10 +409,12 @@
     const shown = ui.expanded ? sizes : sizes.slice(0, VISIBLE_SIZES);
     if (tracked && !shown.includes(tracked)) shown.push(tracked); // la taille choisie reste visible
     const hidden = sizes.length - shown.length;
-    return `<div class="name" title="${esc(product.name)}">${esc(product.name)}</div>
-      <div class="unit">${metric ? 'Coût réel en € ' + esc(metric.unit) + ' · ' : ''}relevé du ${frDate(site?.lastScrape || generated)}</div>
+    const head = `<thead><tr><th>Taille</th><th>Prix vs 90 jours</th>`
+      + `<th class="num">Coût réel${metric ? `<span class="sub">€ ${esc(metric.unit)}</span>` : ''}</th></tr></thead>`;
+    return `<div class="pname" title="${esc(product.name)}">${esc(product.name)}</div>
+      <div class="unit">${esc(site?.name || '')} · relevé du ${frDate(site?.lastScrape || generated)}</div>
       ${live ? liveHtml(live, tracked, lm) : ''}
-      <table>${shown.map((s) => rowHtml(s, d, s === tracked)).join('')}</table>
+      <table>${head}<tbody>${shown.map((s) => rowHtml(s, d, s === tracked)).join('')}</tbody></table>
       ${hidden > 0 ? `<button class="more">Voir ${hidden} autre${hidden > 1 ? 's' : ''} taille${hidden > 1 ? 's' : ''}</button>` : ''}
       ${bestLine(ownBest)}
       <footer><span>Prix indicatifs, vérifie sur le site.</span>
@@ -414,6 +459,8 @@
     .sort((a, b) => a.metric - b.metric)[0] || null;
 
   const TYPE_LABEL = { whey: 'Whey', omega3: 'Oméga-3', creatine: 'Créatine' };
+  // « protéines de gamme Basique » → « Basique », « protéines végétales » → « Végétale ».
+  const famShort = (l) => String(l || '').replace(/^protéines de gamme /, '').replace(/^protéines végétales$/, 'Végétale');
 
   function seenBody() {
     const items = Object.values(seen);
@@ -436,7 +483,7 @@
       const site = data.sites[i.site]?.name || i.site;
       const when = new Date(i.lastSeen).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
       const sel = i.sel ? `Ta sélection : ${esc(i.sel.size)} · ${num(i.sel.price)} €` : '';
-      const best = b ? `dès <b>${num(b.metric, m.decimals)} €</b>${b.rank ? ` · #${b.rank}/${b.of}` : ''}`
+      const best = b ? `dès <b>${num(b.metric, m.decimals)} €</b>${b.rank ? ` · ${ordinal(b.rank)} sur ${b.of}` : ''}`
         : (p ? 'pas de prix en stock' : 'plus suivi');
       return `<li><div class="top"><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.name)}</a>
           <button class="icon forget" data-key="${esc(i.key)}" title="Retirer" aria-label="Retirer">×</button></div>
@@ -483,6 +530,7 @@
         nom: p.name, site: data.sites[p.site]?.name, taille: s.size, prix_eur: s.price,
         cout_reel: Number(s.metric.toFixed(m.decimals)), rang: s.rank ? `${s.rank}/${s.of}` : null,
         plus_bas_90j_eur: s.min90, au_plus_bas: s.price <= s.min90 + 1e-9, tags: p.tags,
+        temps_fort_promo: s.promo ? { evenement: s.promo.event, plus_bas_30j_avant_eur: s.promo.ref } : null,
         deja_consulte: Boolean(seen[p.key]), url: p.url,
       })),
       produits_consultes: Object.values(seen).sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 10).map((i) => ({
@@ -519,13 +567,20 @@
     const checks = `${filters.type === 'whey' ? `<label><input type="checkbox" data-f="noSweet"${filters.noSweet ? ' checked' : ''}> Sans édulcorant</label>` : ''}
       <label><input type="checkbox" data-f="inStock"${filters.inStock ? ' checked' : ''}> En stock</label>
       <label>Pot ≤ <input type="number" min="0" step="1" data-f="budget" value="${esc(filters.budget)}" placeholder="—"> €</label>`;
+    // L'ordre de la liste est déjà le classement : pas de rang « #1/8 » à côté,
+    // qui mélangeait les familles (végétales / Basique…) quand toutes les gammes
+    // sont affichées. On montre la gamme à la place.
+    const showFamily = filters.type === 'whey' && filters.family === 'all';
     const li = list.slice(0, RECO_SHOWN).map(({ p, s }, idx) => {
       const low = s.min90 != null && s.price <= s.min90 + 1e-9;
-      return `<li><div class="top"><span>${idx + 1}. <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.name)}</a>${
+      const promo = s.promo ? promoChip(s, s.price) : '';
+      return `<li><div class="top"><span><span class="idx">${idx + 1}</span><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.name)}</a>${
         seen[p.key] ? '<span class="tag seen">déjà vu</span>' : ''}</span>
-          <b>${num(s.metric, m.decimals)} €</b></div>
+          <span class="metric">${num(s.metric, m.decimals)} €</span></div>
         <div class="bot"><span class="sub">${esc(data.sites[p.site]?.name || p.site)} · ${esc(s.size)} · ${num(s.price)} €${
-          low ? ' · <span class="good">plus bas 90 j</span>' : ''}</span><span class="sub">${s.rank ? `#${s.rank}/${s.of}` : ''}</span></div></li>`;
+          showFamily ? ` · ${esc(famShort(data.families[p.family]))}` : ''}</span>${
+          low ? '<span class="chip good">plus bas 90 j</span>' : ''}</div>
+        ${promo ? `<div class="chips">${promo}</div>` : ''}</li>`;
     }).join('');
     const results = list.length
       ? `<ol class="list">${li}</ol>`

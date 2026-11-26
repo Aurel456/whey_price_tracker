@@ -3584,6 +3584,7 @@ def generate_api(sites: list) -> Path:
             if r.get("Prix (€)") is not None and r.get("Date"):
                 points[(str(r.get("Produit", "")), str(r.get("Taille", "")))].append(
                     (str(r["Date"]), r["Prix (€)"]))
+        events = _site_events(cfg)
         for it in _recommendation_data(rows):
             pts = sorted(points.get((it["produit"], it["taille"]), []))
             if not pts:
@@ -3607,6 +3608,9 @@ def generate_api(sites: list) -> Path:
                 "size": it["taille"], "price": it["prix"], "metric": metric,
                 "inStock": it.get("en_stock") is not False, "date": pts[-1][0],
                 "rank": None, "of": None, **_price_stats(pts, today),
+                # Temps fort promo en cours (sinon None) : l'extension recalcule
+                # l'écart avec le prix affiché, à partir de `ref`.
+                "promo": _promo_check([{"date": d, "prix": p} for d, p in pts], events),
             }
             prod["sizes"].append(offer)
             # Classement : même type, en stock, et pour la whey uniquement la
