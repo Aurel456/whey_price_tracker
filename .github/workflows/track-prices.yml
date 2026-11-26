@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 30
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy_retry.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,10 +63,41 @@ jobs:
         # → aucune contention. On n'arrête PAS le job si un site échoue : l'autre
         # doit quand même être committé et le site publié. Les codes de sortie
         # sont remontés à la dernière étape, qui fait échouer le run (→ email).
+        #
+        # Un tracker en échec est relancé une fois après 3 min (blocage Cloudflare
+        # ponctuel, timeout réseau : HSN a renvoyé 1 le 2026-11-24 puis 47 produits
+        # le lendemain). append_rows est idempotent sur la journée : une relance
+        # ne duplique pas les lignes déjà écrites.
+        #
+        # La fin du log de chaque tentative ratée est publiée en annotation
+        # (::warning / ::error). Les annotations se lisent SANS authentification
+        # via l'API check-runs, contrairement aux logs : c'est ce que lit la skill
+        # /fix-ci (.claude/skills/fix-ci) pour diagnostiquer un échec.
+        env:
+          PYTHONUNBUFFERED: '1'
         run: |
           set +e
-          python hsn_tracker.py & PID_HSN=$!
-          python myprotein_tracker.py & PID_MP=$!
+          mkdir -p run-logs
+          annotate() {  # $1 = error|warning, $2 = titre, $3 = fichier log
+            msg=$(tail -n 40 "$3" | python -c "import sys; print(sys.stdin.read().replace('%','%25').replace('\r','%0D').replace('\n','%0A'), end='')")
+            echo "::$1 title=$2::$msg"
+          }
+          run_tracker() {  # $1 = nom, $2 = script
+            for attempt in 1 2; do
+              python "$2" 2>&1 | tee "run-logs/$1-$attempt.log"
+              code=${PIPESTATUS[0]}
+              [ "$code" -eq 0 ] && return 0
+              if [ "$attempt" -eq 1 ]; then
+                annotate warning "$1 : tentative 1 en échec (exit $code), relance dans 3 min" "run-logs/$1-1.log"
+                sleep 180
+              else
+                annotate error "$1 : échec après 2 tentatives (exit $code)" "run-logs/$1-2.log"
+              fi
+            done
+            return "$code"
+          }
+          run_tracker hsn hsn_tracker.py & PID_HSN=$!
+          run_tracker myprotein myprotein_tracker.py & PID_MP=$!
           wait $PID_HSN; HSN=$?
           wait $PID_MP; MP=$?
           echo "HSN exit=$HSN / MyProtein exit=$MP"
@@ -82,9 +113,12 @@ jobs:
         if: always()
         run: |
           for f in errors.log myprotein_errors.log; do
-            if [ -f "$f" ]; then
+            if [ -s "$f" ]; then
               echo "=== $f ==="
               tail -n 100 "$f"
+              # Aussi en annotation, lisible sans authentification (cf. plus haut).
+              msg=$(tail -n 30 "$f" | python -c "import sys; print(sys.stdin.read().replace('%','%25').replace('\r','%0D').replace('\n','%0A'), end='')")
+              echo "::warning title=$f::$msg"
             fi
           done
 
@@ -108,8 +142,24 @@ jobs:
         with:
           path: docs
 
+      # Le déploiement Pages échoue parfois côté GitHub, sans rapport avec nos
+      # données : « Deployment failed, try again later » (2026-11-25), « No
+      # artifacts named github-pages were found » (2026-11-21). On retente une
+      # fois après 1 min avant de déclarer l'échec.
       - name: Deploy to GitHub Pages
         id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before retrying deployment
+        if: steps.deploy.outcome == 'failure'
+        run: |
+          echo "::warning title=Pages::1re tentative de déploiement en échec, relance dans 60 s"
+          sleep 60
+
+      - name: Deploy to GitHub Pages (2e tentative)
+        id: deploy_retry
+        if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v4
 
       - name: Health check

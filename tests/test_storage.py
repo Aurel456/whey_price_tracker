@@ -48,6 +48,14 @@ def test_new_column_migrates_header(cfg, monkeypatch):
     assert rows[1]["Prix (€)"] == 29.9  # pas de décalage de colonnes
 
 
+def test_rerun_same_day_replaces_instead_of_duplicating(cfg):
+    # La CI relance un tracker en échec : la 2e écriture du jour ne doit pas doubler.
+    core.append_rows([_scraped(), _scraped(size="2Kg", price="50 €")], cfg)
+    core.append_rows([_scraped(price="27,00 €")], cfg)  # relance partielle
+    rows = core.load_rows(cfg)
+    assert sorted((r["Taille"], r["Prix (€)"]) for r in rows) == [("1Kg", 27), ("2Kg", 50)]
+
+
 def test_empty_ingredients_never_erase_known_ones(cfg):
     core.append_rows([_scraped(ingredients="lactosérum, sucralose")], cfg)
     core.append_rows([_scraped(ingredients="")], cfg)  # échec ponctuel du parsing

@@ -339,6 +339,7 @@ def append_rows(rows: list, cfg: "SiteConfig" = HSN_CFG):
     records = [_row_record(r, today) for r in rows]
 
     _migrate_header(cfg.prices_path, PRICE_COLS)
+    _drop_today_duplicates(cfg.prices_path, records, today)
     new_file = not cfg.prices_path.exists()
     with cfg.prices_path.open("a", encoding="utf-8", newline="") as f:
         w = csv.writer(f, lineterminator="\n")
@@ -348,6 +349,25 @@ def append_rows(rows: list, cfg: "SiteConfig" = HSN_CFG):
             w.writerow([_fmt_cell(rec.get(h)) for h in PRICE_COLS])
 
     save_products(records, cfg)
+
+
+def _drop_today_duplicates(path: Path, records: list, today: str) -> None:
+    """Rend `append_rows` idempotent : la CI relance un tracker en échec, et un
+    tracker peut planter APRÈS avoir écrit (dans `generate_dashboard` p. ex.).
+    Les lignes du jour déjà présentes pour un même (produit, taille) sont
+    remplacées par les nouvelles au lieu d'être dupliquées. Les autres lignes du
+    jour sont gardées : une relance partielle complète, elle n'efface pas."""
+    keys = {(r.get("Produit") or "", r.get("Taille") or "") for r in records}
+    old = _read_csv(path)
+    keep = [r for r in old
+            if not (r.get("Date") == today and (r.get("Produit") or "", r.get("Taille") or "") in keys)]
+    if len(keep) == len(old):
+        return
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(PRICE_COLS)
+        for rec in keep:
+            w.writerow([rec.get(c, "") for c in PRICE_COLS])
 
 
 def _migrate_header(path: Path, cols: list) -> None:

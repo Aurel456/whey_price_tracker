@@ -13,7 +13,9 @@ venv/
 .kilo/
 .vscode/
 .idea/
-.claude/
+# .claude/ reste local, sauf les skills du projet (lues aussi par une routine cloud)
+.claude/*
+!.claude/skills/
 
 # Generated output
 # Seul data/ est versionné (historique des prix). Le site docs/ est reconstruit

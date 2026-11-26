@@ -384,6 +384,19 @@ Les pages produit injectent un blob JSON via `initConfigurableOptions('ID', {...
   branche, où `docs/` n'existe plus).
 - Un push qui touche le code de génération déclenche un rebuild + déploiement
   sans scraping (`if: github.event_name != 'push'` sur les étapes de scrape).
+- **Relances automatiques (2026-11-26)** : chaque tracker en échec est relancé
+  une fois après 3 min, et le déploiement Pages une fois après 60 s. Sur les
+  3 runs rouges du 21 au 25/11, deux venaient de GitHub Pages (`Deployment
+  failed, try again later`, `No artifacts named "github-pages"`) et un d'un
+  HSN à 0 ligne qui était revenu le lendemain. `append_rows` est donc
+  **idempotent sur la journée** (`_drop_today_duplicates`) : une relance remplace
+  les lignes du même (produit, taille) au lieu de les doubler.
+- **Diagnostic sans jeton** : les logs de job exigent une authentification, pas
+  les annotations. Le workflow publie la fin du log des trackers en échec et
+  de `errors.log` en `::warning`/`::error`, lisibles via
+  `/repos/…/check-runs/<job_id>/annotations`. La procédure complète est dans la
+  skill `/fix-ci` (`.claude/skills/fix-ci/SKILL.md`, versionnée malgré le
+  `.gitignore` de `.claude/`).
 
 ## Ne pas faire
 
